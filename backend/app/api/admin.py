@@ -7,7 +7,7 @@ from ..models import AIPersona, ModelConfig, User
 from ..schemas import ModelConfigIn, PersonaIn
 from ..security import decrypt_secret, encrypt_secret
 from ..ai.adapters import test_connection
-from .deps import require_admin
+from .deps import require_admin, require_user
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -29,7 +29,8 @@ def model_dict(m: ModelConfig) -> dict:
 
 
 @router.get("/model-configs")
-async def list_models(_: User = Depends(require_admin)):
+async def list_models(_: User = Depends(require_user)):
+    """已登录用户可读（大厅选模型需要）；写操作仅管理员。"""
     async with SessionLocal() as db:
         rows = (await db.execute(select(ModelConfig).order_by(ModelConfig.id))).scalars().all()
         return {"models": [model_dict(m) for m in rows]}
@@ -121,7 +122,8 @@ def persona_dict(p: AIPersona) -> dict:
 
 
 @router.get("/ai-personas")
-async def list_personas(_: User = Depends(require_admin)):
+async def list_personas(_: User = Depends(require_user)):
+    """已登录用户可读（大厅选人格需要）；写操作仅管理员。"""
     async with SessionLocal() as db:
         rows = (await db.execute(select(AIPersona).order_by(AIPersona.id))).scalars().all()
         return {"personas": [persona_dict(p) for p in rows]}

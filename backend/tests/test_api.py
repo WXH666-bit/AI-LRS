@@ -139,7 +139,20 @@ async def test_admin_model_config_crud(client):
 async def test_admin_permission_required(client):
     await _register(client, "bob")
     await _login(client, "bob")
+    # 列表对登录用户只读开放（大厅选模型需要）
     r = await client.get("/admin/model-configs")
+    assert r.status_code == 200
+    r = await client.get("/admin/ai-personas")
+    assert r.status_code == 200
+    # 写操作仅管理员
+    r = await client.post("/admin/model-configs", json={
+        "display_name": "x", "protocol": "openai_compatible",
+        "base_url": "http://x/v1", "model_name": "x", "api_key": "sk-x",
+    })
+    assert r.status_code == 403
+    r = await client.post("/admin/ai-personas", json={"name": "x"})
+    assert r.status_code == 403
+    r = await client.delete("/admin/model-configs/1")
     assert r.status_code == 403
 
 

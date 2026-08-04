@@ -1409,9 +1409,9 @@ class GameEngine:
                 out = [{"seat": s, "label": f"{s}号·{st.display_name(s)}"} for s in alive]
             elif step == "witch":
                 if not st.witch_save_used and st.witch_victim and (st.witch_victim != seat or st.night == 1):
-                    out.append({"seat": st.witch_victim, "label": f"{st.witch_victim}号·{st.display_name(st.witch_victim)}", "kind": "save"})
+                    out.append({"seat": st.witch_victim, "label": f"💊 救 {st.witch_victim}号·{st.display_name(st.witch_victim)}", "kind": "save"})
                 if not st.witch_poison_used:
-                    out += [{"seat": s, "label": f"{s}号·{st.display_name(s)}", "kind": "poison"} for s in alive]
+                    out += [{"seat": s, "label": f"☠️ 毒 {s}号·{st.display_name(s)}", "kind": "poison"} for s in alive]
             return out
         if kind == "hunter_shot":
             return [{"seat": s, "label": f"{s}号·{st.display_name(s)}"} for s in alive]
@@ -1761,8 +1761,25 @@ class GameEngine:
             st = engine.state
             if st.status in ("running", "paused"):
                 st.deadline = time.monotonic() + st.window_duration if st.window_kind else 0.0
-                st.turn_token = 0
+                # 回合令牌从历史最大 token 之后继续，避免与已持久化的
+                # ClientCommand（ai:{token}:...）碰撞而被幂等去重吞掉
+                st.turn_token = await cls._next_token(db, st.game_id)
                 st.ai_delay_until = 0.0
             if st.status == "running":
                 await engine.start_loop()
             return engine
+
+    @staticmethod
+    async def _next_token(db, game_id: int) -> int:
+        from sqlalchemy import func, select
+        rows = (await db.execute(
+            select(ClientCommand.request_id).where(
+                ClientCommand.game_id == game_id,
+                ClientCommand.request_id.like("ai:%")))).scalars().all()
+        max_tok = 0
+        for rid in rows:
+            try:
+                max_tok = max(max_tok, int(rid.split(":")[1]))
+            except (ValueError, IndexError):
+                continue
+        return max_tok + 1

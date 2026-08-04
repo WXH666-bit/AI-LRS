@@ -55,7 +55,7 @@ export function formatEvent(ev: GameEvent): DisplayLine | null {
       return { text: `—— ${prefix} · ${label} ——`, kind: "phase", seq };
     }
     case "role_assign":
-      return { text: `你的身份：${ROLE_LABELS[P.role] || P.role}`, kind: "private", seq };
+      return { text: `${actor}号身份：${ROLE_LABELS[P.role] || P.role}`, kind: "private", seq };
     case "speech":
       return P.skipped
         ? { text: `${actor}号（跳过发言）`, kind: "public", seq }

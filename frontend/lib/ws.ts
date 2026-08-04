@@ -58,6 +58,12 @@ export class GameClient {
 
   private scheduleReconnect() {
     if (this.closed) return;
+    if (this.retryCount >= 5) {
+      // 连续重连失败（如对局已结束被服务端拒绝）→ 停止并通知页面
+      this.cb.onError("连接被拒绝，可能对局已结束");
+      this.cb.onStatus(false);
+      return;
+    }
     const delay = Math.min(1000 * 2 ** this.retryCount, 10000);
     this.retryCount += 1;
     this.reconnectTimer = setTimeout(() => this.open(), delay);

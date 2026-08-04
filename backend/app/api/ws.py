@@ -3,6 +3,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..config import settings
 from ..database import SessionLocal
 from ..models import SessionToken, User
 from ..services.game_manager import manager
@@ -12,7 +13,7 @@ router = APIRouter(tags=["ws"])
 
 
 async def _auth_user(ws: WebSocket) -> User | None:
-    token = ws.cookies.get("ww_session")
+    token = ws.cookies.get(settings.cookie_name)
     if not token:
         return None
     async with SessionLocal() as db:

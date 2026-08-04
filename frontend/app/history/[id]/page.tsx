@@ -40,10 +40,13 @@ export default function ReplayPage() {
       .filter((l) => l !== null) as (DisplayLine & { raw: GameEvent })[];
   }, [data]);
 
+  const roles = useMemo(
+    () => Object.entries(data?.roles || {}).sort((a, b) => Number(a[0]) - Number(b[0])),
+    [data]
+  );
+
   if (loading || !user) return <div className="min-h-screen" />;
   if (!data) return <div className="min-h-screen"><Header user={user} /></div>;
-
-  const roles = Object.entries(data.roles || {}).sort((a, b) => Number(a[0]) - Number(b[0]));
 
   return (
     <div className="min-h-screen">

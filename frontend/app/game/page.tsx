@@ -42,13 +42,23 @@ export default function GamePage() {
           const known = new Set(prev.map((e) => e.seq));
           const fresh = evs
             .map((e) => formatEvent(e))
-            .filter((l): l is DisplayLine => l !== null && !known.has(l.seq));
+            .filter((l): l is DisplayLine => l !== null && !known.has(l.seq))
+            // 相邻重复的阶段行（每个行动窗口都会发 phase_change）只保留一条
+            .filter((l, i, arr) => !(l.kind === "phase" && i > 0 && arr[i - 1].kind === "phase" && arr[i - 1].text === l.text));
           return [...prev, ...fresh];
         }),
       onView: (v) => setView(v),
       onError: (msg) => {
         setToast(msg);
         setTimeout(() => setToast(""), 3500);
+        // 连接被拒绝（对局已结束/不存在）→ 回首页确认状态
+        api<{ game: { status: string } | null }>("/game/current")
+          .then((d) => {
+            if (!d.game || d.game.status === "ended" || d.game.status === "lobby") {
+              router.replace("/");
+            }
+          })
+          .catch(() => {});
       },
       onStatus: setConnected,
     });
@@ -64,6 +74,9 @@ export default function GamePage() {
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [events.length]);
+
+  const wolfEvents = useMemo(() => events.filter((e) => e.kind === "wolf"), [events]);
+  const publicEvents = useMemo(() => events.filter((e) => e.kind !== "wolf"), [events]);
 
   if (loading || !user) return <div className="min-h-screen" />;
 
@@ -117,9 +130,6 @@ export default function GamePage() {
     }
     setTimeout(() => setBusy(false), 200);
   }
-
-  const wolfEvents = useMemo(() => events.filter((e) => e.kind === "wolf"), [events]);
-  const publicEvents = useMemo(() => events.filter((e) => e.kind !== "wolf"), [events]);
 
   return (
     <div className="min-h-screen">
@@ -192,7 +202,8 @@ export default function GamePage() {
             {view.players.map((p) => {
               const acting = g.acting_seats.includes(p.seat);
               const isMe = me?.seat === p.seat;
-              const role = p.role || (view.roles_revealed?.[p.seat] ? roleLabel(view.roles_revealed[p.seat]) : "");
+              const revealed = view.roles_revealed?.[p.seat];
+              const role = revealed ? roleLabel(revealed) : p.role ? roleLabel(p.role) : "";
               return (
                 <div
                   key={p.seat}

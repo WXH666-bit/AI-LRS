@@ -408,6 +408,12 @@ async def test_snapshot_recovery():
             post_snapshot_events = [e for e in engine.events if e["seq"] > snapshot_seq]
             assert last_seq > snapshot_seq
             assert len(post_snapshot_events) >= 3
+    # 模拟崩溃前已持久化的 AI 命令（token 0），验证恢复后令牌从历史之后继续
+    from app.models import ClientCommand
+    async with SessionLocal() as db:
+        db.add(ClientCommand(game_id=engine.state.game_id, request_id="ai:0:3:0",
+                             seat_number=3, type="speak", payload={"text": "x"}))
+        await db.commit()
     # 恢复
     with patch.object(GameEngine, "start_loop", new=AsyncMock()):
         recovered = await GameEngine.recover()
@@ -417,6 +423,8 @@ async def test_snapshot_recovery():
     assert rst.night == night
     assert rst.last_seq == last_seq
     assert len(recovered.events) == len(post_snapshot_events)
+    # 恢复后的回合令牌必须大于历史最大 token（否则 AI 请求被幂等吞掉）
+    assert rst.turn_token > 0
     # 恢复后继续驱动到结束
     await drive_game(recovered)
     assert recovered.state.status == "ended"

@@ -133,6 +133,7 @@ class GameState:
             "window_kind": self.window_kind,
             "acting_seats": list(self.acting_seats),
             "window_duration": self.window_duration,
+            "turn_token": self.turn_token,
             "night_step": self.night_step,
             "wolf_votes": dict(self.wolf_votes),
             "wolf_kill_target": self.wolf_kill_target,

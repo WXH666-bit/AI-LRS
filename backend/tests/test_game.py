@@ -375,6 +375,63 @@ async def test_human_timeout_then_trustee():
             assert any(e["payload"]["controller_type"] == "trustee" for e in control_events)
 
 
+# ============================================================ Hub 死连接清理
+async def test_hub_drops_dead_connections():
+    """死连接（send 失败）必须被丢弃，不能阻塞广播。"""
+    from app.services.hub import Hub
+
+    hub = Hub()
+
+    class DeadConn:
+        def __init__(self):
+            self.seat = None
+            self.user_id = 1
+            self.dropped = False
+
+        async def send(self, data):
+            raise ConnectionError("dead")
+
+    async def fake_send_ok(conn):
+        return None
+
+    alive = Connection(ws=None, user_id=2, seat=None)
+    alive.send = _fake_send(alive)
+    hub.conns.add(DeadConn())
+    hub.conns.add(alive)
+    await hub.broadcast_event({"visible_to": None, "seq": 1, "type": "x", "actor_seat": None,
+                               "day": 1, "night": 1, "phase": "night", "payload": {}})
+    assert len(hub.conns) == 1  # 死连接被清理，活连接保留
+    assert len(alive.received) == 1
+
+
+# ============================================================ 遗言窗口超时（已出局玩家）
+async def test_dead_player_last_words_timeout():
+    """被放逐玩家的遗言窗口必须能超时跳过，不能卡局。"""
+    u = await make_user("human1")
+    engine = await make_game(6, seed=5, empty_seat=1)
+    async with engine.lock:
+        await engine.join(u.id, u.username, 1)
+        await engine.set_ready(u.id, True)
+    with patch.object(GameEngine, "start_loop", new=AsyncMock()):
+        async with engine.lock:
+            await engine.start_game()
+        # 直接构造：1号被放逐进入遗言窗口
+        async with engine.lock:
+            st = engine.state
+            st.pending_last_words = 1
+            st.last_words_acted = False
+            st.phase = "last_words"
+            st.window_kind = "last_words"
+            st.acting_seats = [1]
+            st.deadline = 0  # 已超时
+            st.player(1).alive = False
+            await engine._force_timeout()
+            assert st.last_words_acted is True or any(
+                e["type"] == "last_words" and e["payload"].get("skipped") for e in engine.events)
+            # 遗言窗口已推进（进入下一阶段，而不是卡住）
+            assert st.phase != "last_words"
+
+
 # ============================================================ 快照与恢复
 async def test_snapshot_recovery():
     engine = await make_game(9, seed=8)

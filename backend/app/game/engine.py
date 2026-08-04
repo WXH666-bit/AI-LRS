@@ -929,7 +929,11 @@ class GameEngine:
         events: list[dict] = []
         for seat in st.acting_seats:
             p = st.player(seat)
-            if not p or not p.alive:
+            if not p:
+                continue
+            # 遗言/警徽移交/猎人开枪 窗口的行动者可能已出局，超时同样需要跳过
+            dead_ok = st.window_kind in ("last_words", "sheriff_transfer", "hunter_shot")
+            if not p.alive and not dead_ok:
                 continue
             if p.controller_type in ("ai", "trustee"):
                 if seat in self._ai_inflight:

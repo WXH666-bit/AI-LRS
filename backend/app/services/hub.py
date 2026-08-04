@@ -15,8 +15,14 @@ class Connection:
         self.send_lock = asyncio.Lock()
 
     async def send(self, data: dict) -> None:
+        """发送 JSON；死连接（TCP半开）用超时保护，避免广播永久阻塞引擎。"""
         async with self.send_lock:
-            await self.ws.send_json(data)
+            try:
+                await asyncio.wait_for(self.ws.send_json(data), timeout=10)
+            except asyncio.TimeoutError:
+                raise ConnectionError("send timeout")
+            except Exception:
+                raise
 
 
 class Hub:
@@ -47,6 +53,7 @@ class Hub:
                 try:
                     await conn.send({"type": "event", "event": data})
                 except Exception:
+                    logger.info("drop dead connection user=%s", conn.user_id)
                     self.conns.discard(conn)
 
     async def broadcast_view(self) -> None:
@@ -58,6 +65,7 @@ class Hub:
                 view = engine.build_view(conn.seat)
                 await conn.send({"type": "view", "view": view})
             except Exception:
+                logger.info("drop dead connection user=%s", conn.user_id)
                 self.conns.discard(conn)
 
     async def send_sync(self, conn: Connection, last_seq: int) -> None:

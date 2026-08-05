@@ -3,21 +3,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
+import ActionDock from "@/components/game/ActionDock";
+import EventEntry from "@/components/game/EventEntry";
+import PhaseRibbon from "@/components/game/PhaseRibbon";
+import SeatCard from "@/components/game/SeatCard";
+import Panel from "@/components/ui/Panel";
+import StatusBadge from "@/components/ui/StatusBadge";
 import { api } from "@/lib/api";
 import { formatEvent, roleLabel, type DisplayLine } from "@/lib/formatEvent";
-import type { GameView, LegalAction, LegalTarget } from "@/lib/types";
+import type { GameView, LegalAction } from "@/lib/types";
 import { useUser } from "@/lib/useUser";
 import { GameClient } from "@/lib/ws";
-
-const KIND_COLORS: Record<string, string> = {
-  phase: "text-amber-400 font-bold text-center",
-  public: "text-moon",
-  wolf: "text-purple-300",
-  private: "text-emerald-300",
-  death: "text-red-400",
-  system: "text-sky-300",
-  me: "text-amber-300",
-};
 
 export default function GamePage() {
   const { user, loading } = useUser();
@@ -29,7 +25,7 @@ export default function GamePage() {
   const [speech, setSpeech] = useState("");
   const [chatText, setChatText] = useState("");
   const [tab, setTab] = useState<"public" | "wolf">("public");
-  const [now, setNow] = useState(Date.now());
+  const [, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
   const clientRef = useRef<GameClient | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
@@ -37,33 +33,25 @@ export default function GamePage() {
   useEffect(() => {
     if (!user) return;
     const client = new GameClient({
-      onEvents: (evs) =>
-        setEvents((prev) => {
-          const known = new Set(prev.map((e) => e.seq));
-          const fresh = evs
-            .map((e) => formatEvent(e))
-            .filter((l): l is DisplayLine => l !== null && !known.has(l.seq));
-          // 相邻重复的阶段行（每个行动窗口都会发 phase_change）只保留一条，
-          // 需跨批次比较（prev 的最后一条与 fresh 的第一条）
-          const deduped: DisplayLine[] = [];
-          for (const l of fresh) {
-            const last = deduped.length ? deduped[deduped.length - 1] : prev[prev.length - 1];
-            if (!(l.kind === "phase" && last?.kind === "phase" && last?.text === l.text)) {
-              deduped.push(l);
-            }
-          }
-          return [...prev, ...deduped];
-        }),
-      onView: (v) => setView(v),
-      onError: (msg) => {
-        setToast(msg);
+      onEvents: (incoming) => setEvents((previous) => {
+        const known = new Set(previous.map((event) => event.seq));
+        const fresh = incoming
+          .map((event) => formatEvent(event))
+          .filter((line): line is DisplayLine => line !== null && !known.has(line.seq));
+        const deduped: DisplayLine[] = [];
+        for (const line of fresh) {
+          const last = deduped.length ? deduped[deduped.length - 1] : previous[previous.length - 1];
+          if (!(line.kind === "phase" && last?.kind === "phase" && last.text === line.text)) deduped.push(line);
+        }
+        return [...previous, ...deduped];
+      }),
+      onView: (nextView) => setView(nextView),
+      onError: (message) => {
+        setToast(message);
         setTimeout(() => setToast(""), 3500);
-        // 连接被拒绝（对局已结束/不存在）→ 回首页确认状态
         api<{ game: { status: string } | null }>("/game/current")
-          .then((d) => {
-            if (!d.game || d.game.status === "ended" || d.game.status === "lobby") {
-              router.replace("/");
-            }
+          .then((data) => {
+            if (!data.game || data.game.status === "ended" || data.game.status === "lobby") router.replace("/");
           })
           .catch(() => {});
       },
@@ -76,14 +64,14 @@ export default function GamePage() {
       clearInterval(tick);
       client.close();
     };
-  }, [user]);
+  }, [user, router]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [events.length]);
 
-  const wolfEvents = useMemo(() => events.filter((e) => e.kind === "wolf"), [events]);
-  const publicEvents = useMemo(() => events.filter((e) => e.kind !== "wolf"), [events]);
+  const wolfEvents = useMemo(() => events.filter((event) => event.kind === "wolf"), [events]);
+  const publicEvents = useMemo(() => events.filter((event) => event.kind !== "wolf"), [events]);
 
   if (loading || !user) return <div className="min-h-screen" />;
 
@@ -91,20 +79,19 @@ export default function GamePage() {
     return (
       <div className="min-h-screen">
         <Header user={user} />
-        <div className="flex items-center justify-center h-[60vh] text-slate-400">
-          {connected ? "对局加载中…" : "正在连接对局服务…"}
-        </div>
+        <main className="mx-auto flex min-h-[60vh] max-w-7xl items-center justify-center px-4 sm:px-6">
+          <div className="text-center"><div className="eyebrow mb-3">CONNECTING TO THE TABLE</div><h1 className="font-serif text-3xl font-semibold text-bone">{connected ? "正在加载对局…" : "正在连接对局服务…"}</h1><p className="mt-3 text-sm text-smoke">牌桌状态会在连接建立后出现。</p></div>
+        </main>
       </div>
     );
   }
 
-  const g = view.game;
+  const game = view.game;
   const me = view.me;
-  const isEnded = g.status === "ended";
-  const myTurn = me !== null && me.alive && g.acting_seats.includes(me.seat);
-  const deadline = Math.max(0, Math.ceil(g.deadline));
-  const isWolf = me?.role === "wolf";
-  const canControl = g.is_all_ai && view.game.status !== "ended";
+  const isEnded = game.status === "ended";
+  const myTurn = me !== null && me.alive && game.acting_seats.includes(me.seat);
+  const deadline = Math.max(0, Math.ceil(game.deadline));
+  const canControl = game.is_all_ai && !isEnded;
 
   function send(type: string, payload?: Record<string, any>) {
     clientRef.current?.sendCommand(type, payload);
@@ -127,397 +114,87 @@ export default function GamePage() {
         setChatText("");
       }
     } else if (action.type === "sheriff_action") {
-      if (action.action === "transfer") {
-        send("sheriff_action", { action: "transfer", target });
-      } else {
-        send("sheriff_action", { action: action.action });
-      }
+      send("sheriff_action", action.action === "transfer" ? { action: "transfer", target } : { action: action.action });
     } else if (action.type === "pass") {
       send("pass", {});
     }
     setTimeout(() => setBusy(false), 200);
   }
 
+  async function control(path: string, body?: Record<string, unknown>) {
+    try {
+      await api(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+    } catch (err: any) {
+      setToast(err.message || "操作失败");
+      setTimeout(() => setToast(""), 3500);
+    }
+  }
+
+  async function forceEnd() {
+    if (!confirm("确定强制结束当前对局？身份将立即揭晓。")) return;
+    await control("/game/current/force-end");
+  }
+
+  const currentEvents = tab === "wolf" ? wolfEvents : publicEvents;
+
   return (
     <div className="min-h-screen">
       <Header user={user} />
-      {toast && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-red-900/90 text-red-100 px-4 py-2 rounded-lg text-sm shadow-lg">
-          {toast}
-        </div>
-      )}
+      {toast && <div role="alert" className="fixed left-1/2 top-24 z-50 -translate-x-1/2 rounded-xl border border-cinnabar/30 bg-ink-800 px-4 py-3 text-sm text-[#ef8f87] shadow-[0_18px_50px_rgb(0_0_0_/_30%)]">{toast}</div>}
 
-      {/* 顶栏 */}
-      <div className="border-b border-night-600/60 bg-night-900/80 sticky top-[57px] z-10">
-        <div className="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center gap-x-6 gap-y-1">
-          <span className="font-bold text-amber-300">{g.phase_label}</span>
-          {g.window_kind && <span className="text-sm text-slate-300">🎯 {g.window_label}</span>}
-          <span className="text-sm text-slate-400">
-            {g.phase === "night" ? `第 ${g.night} 夜` : `第 ${g.day} 天`}
-          </span>
-          {myTurn && (
-            <span className="text-sm font-bold text-amber-300">
-              ⏱ {deadline}s
-            </span>
-          )}
-          {!myTurn && deadline > 0 && g.acting_seats.length > 0 && (
-            <span className="text-sm text-slate-500">⏱ {deadline}s</span>
-          )}
-          {g.acting_seats.length > 0 && (
-            <span className="text-sm">
-              等待：
-              {g.acting_seats.map((s) => (
-                <span key={s} className="text-slate-300 mx-0.5">
-                  {s}号
-                </span>
-              ))}
-              {me && myTurn ? "（你！）" : ""}
-            </span>
-          )}
-          <span className={`ml-auto text-xs ${connected ? "text-emerald-400" : "text-red-400"}`}>
-            {connected ? "● 已连接" : "○ 连接中断，重连中…"}
-          </span>
-          {user.role === "admin" && g.status !== "ended" && (
-            <button
-              className="btn-danger text-xs px-3 py-1"
-              onClick={async () => {
-                if (confirm("确定强制结束当前对局？身份将立即揭晓。")) {
-                  try {
-                    await api("/game/current/force-end", { method: "POST" });
-                  } catch (err: any) {
-                    setToast(err.message || "操作失败");
-                  }
-                }
-              }}
-            >
-              强制结束
-            </button>
-          )}
-          {canControl && (
-            <div className="flex items-center gap-1.5">
-              {g.status === "paused" ? (
-                <button className="btn-primary text-xs px-3 py-1" onClick={() => api("/game/current/resume", { method: "POST" })}>
-                  继续
-                </button>
-              ) : (
-                <button className="btn-ghost text-xs px-3 py-1" onClick={() => api("/game/current/pause", { method: "POST" })}>
-                  暂停
-                </button>
-              )}
-              {[1, 2, 3].map((s) => (
-                <button
-                  key={s}
-                  className={`text-xs px-2.5 py-1 rounded ${g.speed === s ? "bg-amber-500 text-night-950" : "bg-night-700 hover:bg-night-600"}`}
-                  onClick={() => api("/game/current/speed", { method: "POST", body: JSON.stringify({ speed: s }) })}
-                >
-                  {s === 1 ? "1x" : s === 2 ? "2x" : "快进"}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+      <PhaseRibbon
+        game={game}
+        connected={connected}
+        myTurn={myTurn}
+        deadline={deadline}
+        onForceEnd={user.role === "admin" && !isEnded ? forceEnd : undefined}
+        onPause={canControl ? () => void control("/game/current/pause") : undefined}
+        onResume={canControl ? () => void control("/game/current/resume") : undefined}
+        onSpeedChange={canControl ? (speed) => void control("/game/current/speed", { speed }) : undefined}
+      />
 
-      <main className="max-w-7xl mx-auto px-4 py-5 grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5">
-        <div className="space-y-5">
-          {/* 座位区 */}
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2.5">
-            {view.players.map((p) => {
-              const acting = g.acting_seats.includes(p.seat);
-              const isMe = me?.seat === p.seat;
-              const revealed = view.roles_revealed?.[p.seat];
-              const role = revealed ? roleLabel(revealed) : p.role ? roleLabel(p.role) : "";
-              return (
-                <div
-                  key={p.seat}
-                  className={`card p-3 text-center relative ${!p.alive ? "opacity-45" : ""} ${
-                    acting ? "acting-glow ring-1 ring-amber-400" : ""
-                  } ${isMe ? "ring-1 ring-emerald-400" : ""}`}
-                >
-                  <div className="text-[10px] text-slate-500">{p.seat}号</div>
-                  <div className="text-sm font-medium truncate mt-0.5">
-                    {!p.alive && "💀 "}
-                    {p.name}
-                    {isMe && "（我）"}
-                  </div>
-                  <div className="text-[10px] mt-1">
-                    {g.sheriff_seat === p.seat && <span className="text-amber-400 mr-1">🎖️警长</span>}
-                    <span className={p.alive ? "text-emerald-400" : "text-red-400"}>
-                      {p.alive ? "存活" : "出局"}
-                    </span>
-                  </div>
-                  {role && <div className="text-[10px] text-purple-300 mt-0.5">{role}</div>}
-                  {acting && <div className="text-[10px] text-amber-300 mt-0.5 animate-pulse">行动中</div>}
-                </div>
-              );
-            })}
-          </div>
+      <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="min-w-0 space-y-6">
+          <Panel className="p-4 sm:p-5" title={<><div className="eyebrow mb-2">THE PLAYERS</div><h2 className="font-serif text-xl font-semibold text-bone">审判座位</h2></>}>
+            <div className="mt-1 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+              {view.players.map((player) => <SeatCard key={player.seat} player={player} variant="game" acting={game.acting_seats.includes(player.seat)} isMe={me?.seat === player.seat} revealedRole={view.roles_revealed?.[player.seat]} sheriff={game.sheriff_seat === player.seat} />)}
+            </div>
+          </Panel>
 
-          {/* 事件流 */}
-          <div className="card flex flex-col h-[440px]">
-            <div className="flex items-center gap-1 px-4 pt-2 border-b border-night-700">
-              <button
-                className={`px-3 py-2 text-sm rounded-t ${tab === "public" ? "text-amber-300 border-b-2 border-amber-400" : "text-slate-400"}`}
-                onClick={() => setTab("public")}
-              >
-                公开频道 {isWolf && `(${publicEvents.length})`}
-              </button>
-              {isWolf && (
-                <button
-                  className={`px-3 py-2 text-sm rounded-t ${tab === "wolf" ? "text-purple-300 border-b-2 border-purple-400" : "text-slate-400"}`}
-                  onClick={() => setTab("wolf")}
-                >
-                  🐺 狼队频道 {wolfEvents.length > 0 && `(${wolfEvents.length})`}
-                </button>
-              )}
+          <Panel className="flex min-h-[560px] flex-col overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 pt-3 sm:px-6">
+              <div className="flex items-center gap-1">
+                <button className={`focus-ring rounded-t-xl px-3 py-3 text-sm font-semibold transition-colors ${tab === "public" ? "border-b-2 border-gold text-bone" : "text-smoke hover:text-bone"}`} onClick={() => setTab("public")}>公开频道 <span className="ml-1 text-xs text-smoke">{publicEvents.length}</span></button>
+                {me?.role === "wolf" && <button className={`focus-ring rounded-t-xl px-3 py-3 text-sm font-semibold transition-colors ${tab === "wolf" ? "border-b-2 border-[#9b78c5] text-[#c9b6e4]" : "text-smoke hover:text-bone"}`} onClick={() => setTab("wolf")}>狼队频道 <span className="ml-1 text-xs text-smoke">{wolfEvents.length}</span></button>}
+              </div>
+              <span className="hidden text-xs text-smoke sm:inline">证词会按时间顺序出现</span>
             </div>
-            <div ref={logRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5 text-sm">
-              {(tab === "wolf" ? wolfEvents : publicEvents).map((e) => (
-                <div key={e.seq} className={KIND_COLORS[e.kind] || "text-moon"}>
-                  {e.text}
-                </div>
-              ))}
-              {(tab === "wolf" ? wolfEvents : publicEvents).length === 0 && (
-                <div className="text-slate-500 text-center mt-8">暂无消息</div>
-              )}
+            <div ref={logRef} className="flex-1 space-y-2 overflow-y-auto p-4 sm:p-6">
+              {currentEvents.map((event, index) => <EventEntry key={event.seq} event={event} isLatest={index === currentEvents.length - 1} />)}
+              {currentEvents.length === 0 && <div className="flex min-h-[360px] items-center justify-center text-sm text-smoke">这一条频道暂时没有消息。</div>}
             </div>
-          </div>
+          </Panel>
         </div>
 
-        {/* 右侧面板 */}
-        <div className="space-y-4">
+        <aside className="min-w-0">
           {isEnded ? (
-            <div className="card p-6 text-center">
-              <div className="text-2xl mb-2">
-                {g.winner === "good" ? "🏆 好人阵营获胜" : g.winner === "wolf" ? "🐺 狼人阵营获胜" : "⏹️ 对局已结束"}
+            <Panel className="overflow-hidden">
+              <div className="border-b border-white/10 bg-gradient-to-br from-gold/10 to-transparent p-6 text-center">
+                <div className="eyebrow mb-3">CASE CLOSED</div>
+                <h2 className="font-serif text-3xl font-semibold text-bone">{game.winner === "good" ? "好人阵营获胜" : game.winner === "wolf" ? "狼人阵营获胜" : "对局已结束"}</h2>
+                <p className="mt-3 text-sm text-smoke">{game.end_reason}</p>
               </div>
-              <p className="text-sm text-slate-400 mb-4">{g.end_reason}</p>
-              <div className="grid grid-cols-2 gap-2 text-sm mb-4">
-                {view.players.map((p) => (
-                  <div key={p.seat} className="bg-night-900 rounded px-2 py-1.5 flex justify-between">
-                    <span className="truncate">{p.seat}号 {p.name}</span>
-                    <span>{view.roles_revealed?.[p.seat] ? roleLabel(view.roles_revealed[p.seat]) : "—"}</span>
-                  </div>
-                ))}
+              <div className="space-y-2 p-5">
+                {view.players.map((player) => <div key={player.seat} className="flex items-center justify-between rounded-xl border border-white/10 bg-ink-900/70 px-3 py-2.5 text-sm"><span className="truncate text-bone">{player.seat}号 {player.name}</span><span className={view.roles_revealed?.[player.seat] === "wolf" ? "text-[#ef8f87]" : "text-[#9bd3c6]"}>{view.roles_revealed?.[player.seat] ? roleLabel(view.roles_revealed[player.seat]) : "—"}</span></div>)}
+                <button className="btn-ghost mt-3 w-full" onClick={() => router.push(`/history/${game.game_id}`)}>查看完整回放</button>
+                <button className="btn-primary w-full" onClick={() => router.push("/")}>返回首页</button>
               </div>
-              <button className="btn-ghost w-full mb-2" onClick={() => router.push(`/history/${g.game_id}`)}>
-                查看完整回放
-              </button>
-              <button className="btn-primary w-full" onClick={() => router.push("/")}>
-                返回首页
-              </button>
-            </div>
+            </Panel>
           ) : (
-            <ActionPanel
-              view={view}
-              me={me}
-              myTurn={myTurn}
-              speech={speech}
-              setSpeech={setSpeech}
-              chatText={chatText}
-              setChatText={setChatText}
-              busy={busy}
-              submit={submitAction}
-            />
+            <ActionDock view={view} me={me} myTurn={myTurn} speech={speech} onSpeechChange={setSpeech} chatText={chatText} onChatTextChange={setChatText} busy={busy} submit={submitAction} />
           )}
-        </div>
+        </aside>
       </main>
-    </div>
-  );
-}
-
-function ActionPanel(props: {
-  view: GameView;
-  me: GameView["me"];
-  myTurn: boolean;
-  speech: string;
-  setSpeech: (s: string) => void;
-  chatText: string;
-  setChatText: (s: string) => void;
-  busy: boolean;
-  submit: (a: LegalAction, target?: number) => void;
-}) {
-  const { view, me, myTurn, speech, setSpeech, chatText, setChatText, busy, submit } = props;
-  const g = view.game;
-  const actions = view.legal_actions || [];
-  const targets = view.legal_targets || [];
-  const isWolf = me?.role === "wolf";
-  const wolfChat = actions.find((a) => a.type === "wolf_chat");
-
-  return (
-    <div className="card p-5 space-y-4">
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="font-bold">{me ? `我的座位 · ${me.seat}号` : "观战模式"}</h2>
-          {me && me.role && <span className="text-sm text-purple-300">身份：{roleLabel(me.role)}</span>}
-        </div>
-        {me && !me.alive && <p className="text-xs text-red-400">你已出局，可继续观看公开信息</p>}
-        {me?.controller_type === "trustee" && (
-          <p className="text-xs text-amber-400">当前为 AI 托管（连续超时），下一轮行动可夺回控制权</p>
-        )}
-      </div>
-
-      {/* 女巫/预言家/守卫 私有信息 */}
-      {me?.role === "seer" && (view.private?.checks?.length > 0) && (
-        <div className="text-xs bg-night-900 rounded p-3 space-y-1">
-          <div className="text-slate-400">查验记录：</div>
-          {view.private.checks.map((c: any, i: number) => (
-            <div key={i} className={c.result === "wolf" ? "text-red-300" : "text-emerald-300"}>
-              第{c.night}夜查 {c.target}号：{c.result === "wolf" ? "狼人" : "好人"}
-            </div>
-          ))}
-        </div>
-      )}
-      {me?.role === "witch" && (
-        <div className="text-xs bg-night-900 rounded p-3 space-y-1 text-slate-300">
-          <div>解药：{view.private.save_used ? "已用" : "未用"}</div>
-          <div>毒药：{view.private.poison_used ? "已用" : "未用"}</div>
-        </div>
-      )}
-      {me?.role === "guard" && view.private.last_target && (
-        <div className="text-xs bg-night-900 rounded p-3 text-slate-300">
-          上一晚守护：{view.private.last_target}号（今晚不能重复守护）
-        </div>
-      )}
-
-      {actions.length === 0 && (
-        <div className="text-sm text-slate-500 text-center py-4">
-          {myTurn ? "轮到你了" : "等待其他玩家…"}
-        </div>
-      )}
-
-      {actions.length > 0 && (
-        <div className="space-y-3">
-          {actions.map((a) => (
-            <div key={`${a.type}-${a.action}-${a.skill}`}>
-              {/* 发言/遗言 */}
-              {a.type === "speak" && (
-                <div className="space-y-2">
-                  <textarea
-                    className="input min-h-[90px]"
-                    placeholder="输入你的发言…"
-                    value={speech}
-                    onChange={(e) => setSpeech(e.target.value)}
-                    maxLength={1000}
-                  />
-                  <div className="flex gap-2">
-                    <button className="btn-primary flex-1" disabled={busy || !speech.trim()} onClick={() => submit(a)}>
-                      发送发言
-                    </button>
-                    <button className="btn-ghost" disabled={busy} onClick={() => submit({ ...a, type: "pass" })}>
-                      跳过
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* 投票 */}
-              {a.type === "vote" && (
-                <div>
-                  <div className="text-xs text-slate-400 mb-1.5">{a.label}</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {targets.map((t: LegalTarget) => (
-                      <button
-                        key={`${a.type}-${t.seat}`}
-                        className="btn-ghost text-xs px-3 py-1.5"
-                        disabled={busy}
-                        onClick={() => submit(a, t.seat)}
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                    <button className="btn-ghost text-xs px-3 py-1.5 text-slate-400" disabled={busy} onClick={() => submit(a, 0)}>
-                      弃权
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* 技能 */}
-              {a.type === "use_skill" && (
-                <div>
-                  <div className="text-xs text-slate-400 mb-1.5">{a.label}</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {targets
-                      .filter((t) => !t.kind || t.kind === a.skill?.replace("witch_", "") || a.skill === "witch_poison")
-                      .map((t: LegalTarget) => (
-                        <button
-                          key={`${a.skill}-${t.seat}`}
-                          className="btn-ghost text-xs px-3 py-1.5"
-                          disabled={busy}
-                          onClick={() => submit(a, t.seat)}
-                        >
-                          {t.kind === "save" ? `💊 救 ${t.seat}号` : t.kind === "poison" ? `☠️ 毒 ${t.seat}号` : t.label}
-                        </button>
-                      ))}
-                    <button className="btn-ghost text-xs px-3 py-1.5 text-slate-400" disabled={busy} onClick={() => submit(a, undefined)}>
-                      不使用
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* 上警 */}
-              {a.type === "sheriff_action" && a.action !== "transfer" && (
-                <button
-                  className={`${a.action === "apply" ? "btn-primary" : a.action === "withdraw" ? "btn-ghost" : "btn-ghost"} w-full`}
-                  disabled={busy}
-                  onClick={() => submit(a)}
-                >
-                  {a.label}
-                </button>
-              )}
-
-              {/* 警徽移交 */}
-              {a.type === "sheriff_action" && a.action === "transfer" && (
-                <div>
-                  <div className="text-xs text-slate-400 mb-1.5">移交警徽给：</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {targets.map((t: LegalTarget) => (
-                      <button key={t.seat} className="btn-ghost text-xs px-3 py-1.5" disabled={busy} onClick={() => submit(a, t.seat)}>
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                  <button className="btn-ghost w-full mt-2 text-red-300 text-xs" disabled={busy} onClick={() => submit({ ...a, action: "destroy" })}>
-                    撕毁警徽
-                  </button>
-                </div>
-              )}
-
-              {/* 自爆 / 狼人私聊 / 弃权 */}
-              {a.type === "wolf_explode" && (
-                <button className="btn-danger w-full" disabled={busy} onClick={() => submit(a)}>
-                  💥 {a.label}
-                </button>
-              )}
-              {a.type === "wolf_chat" && (
-                <div className="space-y-2">
-                  <input
-                    className="input"
-                    placeholder="给狼队友的私聊消息…"
-                    value={chatText}
-                    onChange={(e) => setChatText(e.target.value)}
-                    maxLength={500}
-                  />
-                  <button className="btn-ghost w-full text-purple-300" disabled={busy || !chatText.trim()} onClick={() => submit(a)}>
-                    发送到狼队频道
-                  </button>
-                </div>
-              )}
-              {a.type === "pass" && a.label !== "跳过" && a.label !== "弃权" && a.label !== "不使用" && (
-                <button className="btn-ghost w-full text-slate-400" disabled={busy} onClick={() => submit(a)}>
-                  {a.label}
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {isWolf && !wolfChat && me?.alive && (
-        <div className="text-[10px] text-slate-500">（狼人私聊仅在夜间窗口开启时可用）</div>
-      )}
     </div>
   );
 }

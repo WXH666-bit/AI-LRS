@@ -4,11 +4,34 @@
 
 :root {
   color-scheme: dark;
+  --ink-950: #0b1018;
+  --ink-900: #111925;
+  --ink-800: #151e2d;
+  --ink-700: #1c2738;
+  --ink-600: #2b3a4e;
+  --bone: #f3eee5;
+  --smoke: #91a0b5;
+  --gold: #c89b3c;
+  --cinnabar: #d9574f;
+  --sage: #6fb3a5;
+}
+
+html {
+  background: var(--ink-950);
 }
 
 body {
-  @apply bg-night-950 text-moon;
-  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  @apply min-h-screen bg-ink-950 text-bone antialiased;
+  background-image:
+    radial-gradient(circle at 18% -12%, rgb(200 155 60 / 10%), transparent 34%),
+    radial-gradient(circle at 90% 0%, rgb(217 87 79 / 5%), transparent 28%);
+  background-attachment: fixed;
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+::selection {
+  background: rgb(200 155 60 / 35%);
+  color: var(--bone);
 }
 
 ::-webkit-scrollbar {
@@ -19,43 +42,88 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #33415588;
-  border-radius: 4px;
+  background: rgb(145 160 181 / 28%);
+  border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: rgb(200 155 60 / 60%);
 }
 
 @layer components {
+  .panel {
+    @apply rounded-[18px] border border-white/10 bg-ink-800 shadow-[0_18px_50px_rgba(0,0,0,.18)];
+    background-color: rgb(21 30 45 / 0.9);
+  }
+
+  .panel-elevated {
+    @apply panel border-[#c89b3c]/25 bg-ink-800 shadow-[0_22px_70px_rgba(0,0,0,.28)];
+  }
+
   .card {
-    @apply bg-night-800/80 border border-night-600/60 rounded-xl shadow-lg;
+    @apply panel;
   }
+
+  .eyebrow {
+    @apply text-[10px] font-semibold uppercase tracking-[0.22em] text-gold;
+  }
+
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950;
+  }
+
   .btn {
-    @apply inline-flex items-center justify-center gap-1 rounded-lg px-4 py-2 text-sm font-medium
-      transition-colors disabled:opacity-40 disabled:cursor-not-allowed select-none;
+    @apply focus-ring inline-flex items-center justify-center gap-2 rounded-xl border border-transparent px-4 py-2 text-sm font-semibold
+      transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-40 select-none;
   }
+
   .btn-primary {
-    @apply btn bg-amber-500 hover:bg-amber-400 text-night-950;
+    @apply btn bg-gold text-ink-950 shadow-[0_8px_24px_rgb(200_155_60_/_18%)] hover:-translate-y-0.5 hover:bg-[#d9ad55] hover:shadow-[0_12px_30px_rgb(200_155_60_/_26%)];
   }
+
   .btn-ghost {
-    @apply btn bg-night-700 hover:bg-night-600 text-moon;
+    @apply btn border-white/10 bg-ink-700 text-bone hover:border-[#c89b3c]/40 hover:bg-ink-600;
+    background-color: rgb(28 39 56 / 0.8);
   }
+
+  .btn-subtle {
+    @apply btn bg-transparent text-smoke hover:bg-white/5 hover:text-bone;
+  }
+
   .btn-danger {
-    @apply btn bg-blood hover:bg-red-700 text-white;
+    @apply btn bg-cinnabar text-white shadow-[0_8px_24px_rgb(217_87_79_/_18%)] hover:-translate-y-0.5 hover:bg-[#e46d64];
   }
+
   .input {
-    @apply w-full rounded-lg bg-night-900 border border-night-600 px-3 py-2 text-sm
-      focus:outline-none focus:border-amber-400 placeholder:text-slate-500;
+    @apply focus-ring w-full rounded-xl border border-white/10 bg-ink-900 px-3.5 py-2.5 text-sm text-bone placeholder:text-[#91a0b5]/60
+      focus:border-gold/80 focus:bg-ink-900;
+    background-color: rgb(17 25 37 / 0.9);
   }
+
   .label {
-    @apply block text-xs text-slate-400 mb-1;
+    @apply mb-1.5 block text-xs font-medium text-smoke;
+  }
+
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold;
   }
 }
 
 @keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(251, 191, 36, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgb(200 155 60 / 30%); }
+  50% { box-shadow: 0 0 0 7px rgb(200 155 60 / 0%); }
 }
+
 .acting-glow {
-  animation: pulse-glow 1.2s ease-in-out infinite;
+  animation: pulse-glow 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

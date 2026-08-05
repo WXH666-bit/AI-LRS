@@ -108,6 +108,30 @@ async def drive_until_phase(engine, phase: str):
     raise AssertionError("未进入目标阶段")
 
 
+async def test_ai_seat_update_keeps_seat():
+    """AI 座位更换模型/人格（update action）不改变座位类型。"""
+    engine = await make_game(6, seed=1)
+    async with engine.lock:
+        before = engine.state.player(1)
+        assert before.controller_type == "ai"
+        assert before.model_config_id is not None
+        await engine.ai_seat(1, "update", None, None)
+        after = engine.state.player(1)
+        assert after.controller_type == "ai"
+        assert after.model_config_id is not None
+    # 真人座位不能 update
+    u = await make_user("upd")
+    async with engine.lock:
+        await engine.ai_seat(2, "remove", None, None)
+        await engine.join(u.id, u.username, 2)
+    try:
+        async with engine.lock:
+            await engine.ai_seat(2, "update", None, None)
+        raise AssertionError("真人座位不应允许 update")
+    except GameError:
+        pass
+
+
 # ============================================================ 幂等
 async def test_duplicate_request_id_ignored():
     engine = await make_game(6, seed=3)

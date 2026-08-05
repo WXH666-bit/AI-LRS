@@ -7,6 +7,11 @@ import { api } from "@/lib/api";
 import type { GameSummary, ModelConfig, Persona } from "@/lib/types";
 import { useUser } from "@/lib/useUser";
 
+interface SeatCfg {
+  modelId: number | null;
+  personaId: number | null;
+}
+
 export default function LobbyPage() {
   const { user, loading } = useUser();
   const router = useRouter();
@@ -15,9 +20,11 @@ export default function LobbyPage() {
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [seatFilter, setSeatFilter] = useState<number | null>(null);
-  const [modelId, setModelId] = useState<number | null>(null);
-  const [personaId, setPersonaId] = useState<number | null>(null);
+  // 每个座位独立的模型/人格选择
+  const [seatCfg, setSeatCfg] = useState<Record<number, SeatCfg>>({});
+  // 顶部“AI 补齐”使用的默认选择
+  const [fillModelId, setFillModelId] = useState<number | null>(null);
+  const [fillPersonaId, setFillPersonaId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -44,6 +51,7 @@ export default function LobbyPage() {
 
   const game = summary?.game;
   const me = summary?.me;
+  const enabledModels = models.filter((m) => m.enabled);
 
   async function act(path: string, body?: any) {
     setError("");
@@ -56,6 +64,34 @@ export default function LobbyPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function cfgOf(seat: number): SeatCfg {
+    return seatCfg[seat] ?? { modelId: null, personaId: null };
+  }
+
+  function setCfg(seat: number, patch: Partial<SeatCfg>) {
+    setSeatCfg((prev) => ({ ...prev, [seat]: { ...cfgOf(seat), ...patch } }));
+  }
+
+  function addAI(seat: number) {
+    const { modelId, personaId } = cfgOf(seat);
+    act("/game/current/ai-seats", { seat_number: seat, action: "add", model_config_id: modelId, persona_id: personaId });
+  }
+
+  function updateAI(seat: number) {
+    const { modelId, personaId } = cfgOf(seat);
+    act("/game/current/ai-seats", { seat_number: seat, action: "update", model_config_id: modelId, persona_id: personaId });
+  }
+
+  function modelName(id: number | null | undefined): string {
+    if (!id) return "默认模型";
+    return models.find((m) => m.id === id)?.display_name || `模型#${id}`;
+  }
+
+  function personaName(id: number | null | undefined, fallback?: string | null): string {
+    if (!id) return "自由发挥";
+    return personas.find((p) => p.id === id)?.name || fallback || `人格#${id}`;
   }
 
   return (
@@ -78,13 +114,10 @@ export default function LobbyPage() {
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-8">
           {summary?.players.map((p) => {
             const empty = p.controller_type === "empty";
+            const isAI = p.controller_type === "ai";
+            const cfg = cfgOf(p.seat);
             return (
-              <div
-                key={p.seat}
-                className={`card p-4 relative ${empty ? "opacity-50 border-dashed" : ""} ${
-                  seatFilter === p.seat ? "ring-2 ring-amber-400" : ""
-                }`}
-              >
+              <div key={p.seat} className={`card p-4 relative ${empty ? "opacity-80 border-dashed" : ""}`}>
                 <div className="absolute top-2 right-2 text-xs text-slate-500">{p.seat}号</div>
                 {p.is_host && <div className="text-[10px] text-amber-400 mb-1">🏠 房主</div>}
                 {empty ? (
@@ -94,36 +127,80 @@ export default function LobbyPage() {
                     <div className="font-medium truncate mt-2">{p.name}</div>
                     <div className="text-xs text-slate-400 mt-1">
                       {p.controller_type === "human" ? "真人" : p.controller_type === "trustee" ? "AI托管" : "AI"}
-                      {p.controller_type === "ai" && p.persona_name ? ` · ${p.persona_name}` : ""}
+                      {isAI && (
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          {modelName(p.model_config_id)} · {personaName(null, p.persona_name)}
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
-                <div className="flex gap-1.5 mt-3">
-                  {!empty && p.controller_type === "human" && p.user_id === user.id && (
-                    <>
-                      <button
-                        className={`btn text-xs px-2 py-1 ${p.ready ? "btn-primary" : "btn-ghost"}`}
-                        onClick={() => act("/game/current/ready", { ready: !p.ready })}
-                      >
-                        {p.ready ? "已准备 ✓" : "准备"}
-                      </button>
-                      <button className="btn-ghost text-xs px-2 py-1" onClick={() => act("/game/current/leave")}>
-                        离开
-                      </button>
-                    </>
-                  )}
-                  {me === null && !empty && p.controller_type === "human" && (
-                    <span className="text-xs text-slate-500 self-center">已就座</span>
-                  )}
-                  {game?.is_host && p.controller_type === "ai" && (
+
+                {/* 真人操作 */}
+                {!empty && p.controller_type === "human" && p.user_id === user.id && (
+                  <div className="flex gap-1.5 mt-3">
                     <button
-                      className="btn-ghost text-xs px-2 py-1 text-red-300"
-                      onClick={() => act("/game/current/ai-seats", { seat_number: p.seat, action: "remove" })}
+                      className={`btn text-xs px-2 py-1 ${p.ready ? "btn-primary" : "btn-ghost"}`}
+                      onClick={() => act("/game/current/ready", { ready: !p.ready })}
                     >
-                      移除
+                      {p.ready ? "已准备 ✓" : "准备"}
                     </button>
-                  )}
-                </div>
+                    <button className="btn-ghost text-xs px-2 py-1" onClick={() => act("/game/current/leave")}>
+                      离开
+                    </button>
+                  </div>
+                )}
+
+                {/* 房主：空位/AI 座位配置（每座位独立模型与人格） */}
+                {game?.is_host && (empty || isAI) && (
+                  <div className="space-y-1.5 mt-3">
+                    <select
+                      className="input text-xs px-2 py-1 h-8"
+                      value={cfg.modelId ?? ""}
+                      onChange={(e) => setCfg(p.seat, { modelId: e.target.value ? Number(e.target.value) : null })}
+                    >
+                      <option value="">默认模型</option>
+                      {enabledModels.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.display_name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="input text-xs px-2 py-1 h-8"
+                      value={cfg.personaId ?? ""}
+                      onChange={(e) => setCfg(p.seat, { personaId: e.target.value ? Number(e.target.value) : null })}
+                    >
+                      <option value="">自由发挥</option>
+                      {personas.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="flex gap-1.5">
+                      {empty && (
+                        <button className="btn-primary text-xs px-2 py-1 flex-1" disabled={busy} onClick={() => addAI(p.seat)}>
+                          ＋ 添加 AI
+                        </button>
+                      )}
+                      {isAI && (
+                        <>
+                          <button className="btn-ghost text-xs px-2 py-1 flex-1" disabled={busy} onClick={() => updateAI(p.seat)}>
+                            更换
+                          </button>
+                          <button
+                            className="btn-ghost text-xs px-2 py-1 text-red-300"
+                            disabled={busy}
+                            onClick={() => act("/game/current/ai-seats", { seat_number: p.seat, action: "remove" })}
+                          >
+                            移除
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -136,20 +213,20 @@ export default function LobbyPage() {
           </button>
         )}
 
-        {/* 房主 AI 配置 */}
+        {/* 房主：一键补齐空位 */}
         {game?.is_host && (
           <div className="card p-5 mb-6">
-            <h2 className="font-bold mb-3">🤖 AI 座位配置</h2>
+            <h2 className="font-bold mb-3">🤖 一键 AI 补齐空位</h2>
             <div className="flex flex-wrap items-end gap-3">
               <div>
                 <label className="label">模型</label>
                 <select
                   className="input w-48"
-                  value={modelId ?? ""}
-                  onChange={(e) => setModelId(e.target.value ? Number(e.target.value) : null)}
+                  value={fillModelId ?? ""}
+                  onChange={(e) => setFillModelId(e.target.value ? Number(e.target.value) : null)}
                 >
                   <option value="">默认模型</option>
-                  {models.filter((m) => m.enabled).map((m) => (
+                  {enabledModels.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.display_name}（{m.model_name}）
                     </option>
@@ -160,10 +237,10 @@ export default function LobbyPage() {
                 <label className="label">人格</label>
                 <select
                   className="input w-44"
-                  value={personaId ?? ""}
-                  onChange={(e) => setPersonaId(e.target.value ? Number(e.target.value) : null)}
+                  value={fillPersonaId ?? ""}
+                  onChange={(e) => setFillPersonaId(e.target.value ? Number(e.target.value) : null)}
                 >
-                  <option value="">默认人格</option>
+                  <option value="">自由发挥</option>
                   {personas.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -171,27 +248,22 @@ export default function LobbyPage() {
                   ))}
                 </select>
               </div>
-              <div className="flex gap-2">
-                <button className="btn-ghost" onClick={() => setSeatFilter(null)} disabled={busy}>
-                  {seatFilter ? `向 ${seatFilter} 号添加 AI` : "选择空位添加 AI"}
-                </button>
-                <button
-                  className="btn-primary"
-                  disabled={busy}
-                  onClick={() =>
-                    act("/game/current/ai-fill", {
-                      model_config_id: modelId,
-                      persona_id: personaId,
-                    })
-                  }
-                >
-                  AI 补齐空位
-                </button>
-              </div>
+              <button
+                className="btn-primary"
+                disabled={busy}
+                onClick={() =>
+                  act("/game/current/ai-fill", {
+                    model_config_id: fillModelId,
+                    persona_id: fillPersonaId,
+                  })
+                }
+              >
+                AI 补齐所有空位
+              </button>
             </div>
             {models.length === 0 && (
               <p className="text-xs text-amber-400 mt-2">
-                尚未配置模型，请先由管理员在“模型配置”页添加
+                尚未配置模型，请先由管理员在“模型配置”页添加（支持 DeepSeek、豆包、Qwen、GLM、Claude 等）
               </p>
             )}
           </div>

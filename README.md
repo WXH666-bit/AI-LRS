@@ -33,9 +33,13 @@ start.cmd     # 启动：后端(8000) + 前端(3000)
 | 服务 | 协议 | Base URL 示例 | 模型名示例 |
 | --- | --- | --- | --- |
 | OpenAI | openai_compatible | `https://api.openai.com/v1` | gpt-4o |
+| DeepSeek | openai_compatible | `https://api.deepseek.com/v1` | deepseek-chat |
+| 豆包 (火山方舟) | openai_compatible | `https://ark.cn-beijing.volces.com/api/v3` | doubao-seed-1-6-250615（或你的推理接入点） |
 | 阿里云百炼 (Qwen) | openai_compatible | `https://dashscope.aliyuncs.com/compatible-mode/v1` | qwen-max |
 | 智谱 (GLM) | openai_compatible | `https://open.bigmodel.cn/api/paas/v4` | glm-4-plus |
 | Anthropic | anthropic_messages | `https://api.anthropic.com` | claude-sonnet-5 |
+
+> 豆包提示：火山方舟的模型名需要填「推理接入点 ID」（形如 `ep-xxxxxxxx`）或带版本的模型名（如 `doubao-seed-1-6-250615`），请在火山方舟控制台确认后填入。
 
 ## 配置说明（.env）
 

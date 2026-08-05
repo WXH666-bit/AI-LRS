@@ -1586,6 +1586,10 @@ class GameEngine:
             await self._apply_ai_defaults(p, model_config_id, persona_id)
             p.controller_type = "ai"
             p.ready = True
+        elif action == "update":
+            if p.controller_type != "ai":
+                raise GameError("只能修改AI座位的模型与人格")
+            await self._apply_ai_defaults(p, model_config_id, persona_id)
         elif action == "remove":
             if p.controller_type not in ("ai", "empty"):
                 raise GameError("只能移除AI座位")
@@ -1631,7 +1635,7 @@ class GameEngine:
             raise GameError("尚未配置可用模型，请先到后台添加模型配置")
         p.model_config_id = cfg.id
         p.persona_id = persona.id if persona else None
-        p.persona_name = persona.name if persona else "通用"
+        p.persona_name = persona.name if persona else "自由发挥"
 
     async def start_game(self) -> None:
         st = self.state

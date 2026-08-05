@@ -1,40 +1,40 @@
 @echo off
-rem AI狼人杀 首次安装脚本（Windows）
-rem 创建 .venv、安装后端依赖、安装前端依赖
+rem AI Werewolf - first-time setup (Windows)
+rem Creates .venv, installs backend deps, installs frontend deps
 
 cd /d "%~dp0"
 
 echo ========================================
-echo   AI 狼人杀 - 首次安装
+echo   AI Werewolf - First-Time Setup
 echo ========================================
 
-echo [1/3] 创建 Python 虚拟环境 .venv ...
+echo [1/3] Creating Python venv .venv ...
 python -m venv .venv
 if errorlevel 1 (
-    echo [错误] 请先安装 Python 3.11+ 并加入 PATH
+    echo [ERROR] Please install Python 3.11+ and add it to PATH.
     pause
     exit /b 1
 )
 
-echo [2/3] 安装后端依赖 ...
+echo [2/3] Installing backend dependencies ...
 ".venv\Scripts\python" -m pip install --upgrade pip
 ".venv\Scripts\python" -m pip install -r backend\requirements.txt
 if errorlevel 1 (
-    echo [错误] 后端依赖安装失败
+    echo [ERROR] Backend dependency install failed.
     pause
     exit /b 1
 )
 
-echo [3/3] 安装前端依赖 ...
+echo [3/3] Installing frontend dependencies ...
 cd frontend
 call npm install
 if errorlevel 1 (
-    echo [错误] 前端依赖安装失败
+    echo [ERROR] Frontend dependency install failed.
     pause
     exit /b 1
 )
 cd ..
 
 echo.
-echo 安装完成！运行 start.cmd 启动应用。
+echo Setup complete! Run start.cmd to launch the app.
 pause

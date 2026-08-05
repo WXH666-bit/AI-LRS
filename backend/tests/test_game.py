@@ -285,6 +285,24 @@ def test_witch_self_save_only_night1():
     assert evs[0]["type"] == "witch_action"
 
 
+def test_skipping_seer_and_witch_actions_is_private():
+    seer_state = GameState(game_id=1, board_size=6, status="running", night=1,
+                           night_step="seer", window_kind="night_skill", acting_seats=[3])
+    seer_state.players = _seats(6)
+    seer_state.players[2].role = "seer"
+    seer_event = GameEngine(state=seer_state)._handle_command("pass", {}, 3)[0]
+    assert seer_event["type"] == "seer_result"
+    assert seer_event["visible_to"] == [3]
+
+    witch_state = GameState(game_id=1, board_size=6, status="running", night=1,
+                            night_step="witch", window_kind="night_skill", acting_seats=[4])
+    witch_state.players = _seats(6)
+    witch_state.players[3].role = "witch"
+    witch_event = GameEngine(state=witch_state)._handle_command("pass", {}, 4)[0]
+    assert witch_event["type"] == "witch_action"
+    assert witch_event["visible_to"] == [4]
+
+
 def test_not_acting_seat_rejected():
     st = GameState(game_id=1, board_size=6, status="running", phase="day_speech",
                    window_kind="speech", acting_seats=[5])
@@ -376,6 +394,33 @@ async def test_view_hides_roles_from_spectators():
             roles = [p["role"] for p in view2["players"] if p["seat"] != 1]
             assert all(r is None for r in roles)
             assert view2["me"]["role"] is not None
+
+
+def test_role_setup_is_public_but_seat_roles_stay_hidden():
+    engine = make_engine_with_state()
+    engine.state.players = _seats(6)
+    view = engine.build_view(None)
+    assert [(item["role"], item["count"]) for item in view["game"]["role_setup"]] == [
+        ("wolf", 2), ("seer", 1), ("witch", 1), ("villager", 2)
+    ]
+    assert all(player["role"] is None for player in view["players"])
+
+
+def test_admin_spectator_can_see_all_seat_roles():
+    engine = make_engine_with_state()
+    engine.state.players = _seats(6)
+    engine.state.players[0].role = "wolf"
+    view = engine.build_view(None, viewer_is_admin=True)
+    assert view["players"][0]["role"] == "wolf"
+    assert view["roles_revealed"][1] == "wolf"
+
+
+def test_non_admin_spectator_cannot_see_all_seat_roles():
+    engine = make_engine_with_state()
+    engine.state.players = _seats(6)
+    view = engine.build_view(None, viewer_is_admin=False)
+    assert all(player["role"] is None for player in view["players"])
+    assert "roles_revealed" not in view
 
 
 # ============================================================ 超时与托管

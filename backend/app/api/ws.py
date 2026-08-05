@@ -42,7 +42,7 @@ async def ws_game(ws: WebSocket):
         if p.user_id == user.id:
             seat = p.seat_number
             break
-    conn = await manager.hub.connect(ws, user.id, seat)
+    conn = await manager.hub.connect(ws, user.id, seat, is_admin=user.role == "admin")
     try:
         # 初始同步：完整可见事件 + 视图
         await manager.hub.send_sync(conn, 0)

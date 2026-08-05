@@ -65,17 +65,27 @@ export function formatEvent(ev: GameEvent): DisplayLine | null {
         ? { text: `${actor}号遗言（跳过）`, kind: "public", seq }
         : { text: `💀 【${actor}号遗言】${P.text}`, kind: "death", seq };
     case "vote":
-      return { text: `投票：${actor}号 → ${P.target}号`, kind: "public", seq };
+      return P.target
+        ? { text: `投票：${actor}号 → ${P.target}号`, kind: "public", seq }
+        : { text: `${actor}号选择弃权`, kind: "public", seq };
     case "pk_vote":
-      return { text: `PK投票：${actor}号 → ${P.target}号`, kind: "public", seq };
+      return P.target
+        ? { text: `PK投票：${actor}号 → ${P.target}号`, kind: "public", seq }
+        : { text: `${actor}号选择弃权`, kind: "public", seq };
     case "election_vote":
-      return { text: `警长票：${actor}号 → ${P.target}号`, kind: "public", seq };
+      return P.target
+        ? { text: `警长票：${actor}号 → ${P.target}号`, kind: "public", seq }
+        : { text: `${actor}号选择弃权`, kind: "public", seq };
     case "election_pk_vote":
-      return { text: `警长PK票：${actor}号 → ${P.target}号`, kind: "public", seq };
+      return P.target
+        ? { text: `警长PK票：${actor}号 → ${P.target}号`, kind: "public", seq }
+        : { text: `${actor}号选择弃权`, kind: "public", seq };
     case "wolf_chat":
       return { text: `【狼队】${actor}号：${P.text || ""}`, kind: "wolf", seq };
     case "wolf_vote":
-      return { text: `${actor}号狼选择击杀 ${P.target}号`, kind: "wolf", seq };
+      return P.target
+        ? { text: `${actor}号狼选择击杀 ${P.target}号`, kind: "wolf", seq }
+        : { text: `${actor}号狼选择空刀`, kind: "wolf", seq };
     case "wolf_kill_result":
       return P.target
         ? { text: `狼人今夜选择击杀 ${P.target}号`, kind: "wolf", seq }

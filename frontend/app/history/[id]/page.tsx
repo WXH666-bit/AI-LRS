@@ -8,7 +8,8 @@ import Panel from "@/components/ui/Panel";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { api } from "@/lib/api";
 import { formatEvent, roleLabel, type DisplayLine } from "@/lib/formatEvent";
-import type { GameEvent } from "@/lib/types";
+import RoleRoster from "@/components/game/RoleRoster";
+import type { GameEvent, RoleSetupItem } from "@/lib/types";
 import { useUser } from "@/lib/useUser";
 
 interface ReplayData {
@@ -20,6 +21,7 @@ interface ReplayData {
     created_at: string | null;
     ended_at: string | null;
   };
+  role_setup: RoleSetupItem[];
   roles: Record<number, string>;
   events: GameEvent[];
 }
@@ -80,6 +82,8 @@ export default function ReplayPage() {
           </div>
           <Link href="/history" className="btn-ghost w-fit">← 返回历史</Link>
         </div>
+
+        <RoleRoster items={data.role_setup} />
 
         <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
           <Panel className="h-fit p-5 sm:p-6" title={<><div className="eyebrow mb-2">IDENTITIES</div><h2 className="font-serif text-xl font-semibold text-bone">身份揭晓</h2></>}>

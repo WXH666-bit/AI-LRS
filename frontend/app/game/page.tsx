@@ -6,6 +6,7 @@ import Header from "@/components/Header";
 import ActionDock from "@/components/game/ActionDock";
 import EventEntry from "@/components/game/EventEntry";
 import PhaseRibbon from "@/components/game/PhaseRibbon";
+import RoleRoster from "@/components/game/RoleRoster";
 import SeatCard from "@/components/game/SeatCard";
 import Panel from "@/components/ui/Panel";
 import StatusBadge from "@/components/ui/StatusBadge";
@@ -155,6 +156,7 @@ export default function GamePage() {
 
       <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-6">
+          <RoleRoster items={game.role_setup} revealed={user.role === "admin" && me === null} />
           <Panel className="p-4 sm:p-5" title={<><div className="eyebrow mb-2">THE PLAYERS</div><h2 className="font-serif text-xl font-semibold text-bone">审判座位</h2></>}>
             <div className="mt-1 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
               {view.players.map((player) => <SeatCard key={player.seat} player={player} variant="game" acting={game.acting_seats.includes(player.seat)} isMe={me?.seat === player.seat} revealedRole={view.roles_revealed?.[player.seat]} sheriff={game.sheriff_seat === player.seat} />)}

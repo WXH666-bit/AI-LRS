@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 
 from ..database import SessionLocal
+from ..game.constants import role_setup_for
 from ..game.engine import GameError
 from ..models import Game, GameEvent, GamePlayer, User
 from ..schemas import AIFillIn, AISeatIn, CreateGameIn, JoinIn, ReadyIn, SpeedIn
@@ -255,6 +256,7 @@ async def replay(game_id: int, user: User = Depends(require_user)):
             .order_by(GamePlayer.seat_number))).scalars().all()
     return {
         "game": _game_meta(row, user.id),
+        "role_setup": role_setup_for(row.board_size),
         "roles": {p.seat_number: p.role for p in players if p.role},
         "events": [{
             "seq": e.sequence_number,

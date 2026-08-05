@@ -31,9 +31,16 @@ export interface MeInfo {
   is_host: boolean;
 }
 
+export interface RoleSetupItem {
+  role: string;
+  label: string;
+  count: number;
+}
+
 export interface GameInfo {
   game_id: number;
   board_size: number;
+  role_setup: RoleSetupItem[];
   status: "lobby" | "running" | "paused" | "ended";
   phase: string;
   phase_label: string;

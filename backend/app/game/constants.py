@@ -19,6 +19,21 @@ BOARDS = {
     9: ["wolf", "wolf", "wolf", "seer", "witch", "hunter", "villager", "villager", "villager"],
     12: ["wolf", "wolf", "wolf", "wolf", "seer", "witch", "hunter", "guard", "villager", "villager", "villager", "villager"],
 }
+
+
+def role_setup_for(board_size: int) -> list[dict[str, int | str]]:
+    """返回公开的角色构成，不包含任何座位分配信息。"""
+    board = BOARDS.get(board_size, [])
+    setup: list[dict[str, int | str]] = []
+    seen: set[str] = set()
+    for role in board:
+        if role in seen:
+            continue
+        seen.add(role)
+        setup.append({"role": role, "label": ROLE_LABELS[role], "count": board.count(role)})
+    return setup
+
+
 SHERIFF_BOARDS = {9, 12}
 
 PHASE_LABELS = {

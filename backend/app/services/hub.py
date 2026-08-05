@@ -8,10 +8,11 @@ logger = logging.getLogger("game.hub")
 
 
 class Connection:
-    def __init__(self, ws: WebSocket, user_id: int, seat: int | None):
+    def __init__(self, ws: WebSocket, user_id: int, seat: int | None, is_admin: bool = False):
         self.ws = ws
         self.user_id = user_id
         self.seat = seat
+        self.is_admin = is_admin
         self.send_lock = asyncio.Lock()
 
     async def send(self, data: dict) -> None:
@@ -33,9 +34,10 @@ class Hub:
     def is_user_online(self, user_id: int) -> bool:
         return any(c.user_id == user_id for c in self.conns)
 
-    async def connect(self, ws: WebSocket, user_id: int, seat: int | None) -> Connection:
+    async def connect(self, ws: WebSocket, user_id: int, seat: int | None,
+                      is_admin: bool = False) -> Connection:
         await ws.accept()
-        conn = Connection(ws, user_id, seat)
+        conn = Connection(ws, user_id, seat, is_admin=is_admin)
         self.conns.add(conn)
         return conn
 
@@ -62,7 +64,7 @@ class Hub:
             return
         for conn in list(self.conns):
             try:
-                view = engine.build_view(conn.seat)
+                view = engine.build_view(conn.seat, viewer_is_admin=conn.is_admin)
                 await conn.send({"type": "view", "view": view})
             except Exception:
                 logger.info("drop dead connection user=%s", conn.user_id)
@@ -81,5 +83,5 @@ class Hub:
                 continue
             missing.append(self._public_event(ev))
         await conn.send({"type": "sync_events", "events": missing})
-        view = engine.build_view(conn.seat)
+        view = engine.build_view(conn.seat, viewer_is_admin=conn.is_admin)
         await conn.send({"type": "view", "view": view})

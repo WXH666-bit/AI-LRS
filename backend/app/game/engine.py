@@ -22,6 +22,7 @@ from ..models import (
 from .constants import (
     BOARDS,
     PHASE_LABELS,
+    role_setup_for,
     SHERIFF_BOARDS,
     SPECIAL_ROLES,
     WINDOW_LABELS,
@@ -942,7 +943,8 @@ class GameEngine:
                     continue
                 # AI 无在途调用（未配置模型等）→ 直接执行兜底跳过
                 _etype, _payload = self._skip_event_for(seat)
-                events.append(self._make_event(_etype, seat, _payload))
+                events.append(self._make_event(
+                    _etype, seat, _payload, visible_to=self._skip_event_visibility(seat)))
                 continue
             p.consecutive_timeouts += 1
             if p.consecutive_timeouts >= 2:
@@ -950,7 +952,8 @@ class GameEngine:
                 self._players_dirty = True
                 events.append(self._make_event("seat_control", seat, {"controller_type": "trustee"}))
             _etype, _payload = self._skip_event_for(seat)
-            events.append(self._make_event(_etype, seat, _payload))
+            events.append(self._make_event(
+                _etype, seat, _payload, visible_to=self._skip_event_visibility(seat)))
         if events:
             await self._emit(events)
         await self._tick()
@@ -979,6 +982,12 @@ class GameEngine:
         if kind == "sheriff_transfer":
             return "sheriff_destroy", {}
         return "speech", {"skipped": True}
+
+    def _skip_event_visibility(self, seat: int) -> list[int] | None:
+        """返回超时/弃权事件的可见范围。夜间查验和用药决定属于个人信息。"""
+        if self.state.window_kind == "night_skill" and self.state.night_step in ("seer", "witch"):
+            return [seat]
+        return None
 
     # ============================================================ AI 启动
     def _launch_ai(self) -> None:
@@ -1096,7 +1105,8 @@ class GameEngine:
 
         if cmd_type == "pass":
             _etype, _payload = self._skip_event_for(seat)
-            return [self._make_event(_etype, seat, _payload)]
+            return [self._make_event(
+                _etype, seat, _payload, visible_to=self._skip_event_visibility(seat))]
 
         if kind in SPEECH_WINDOWS:
             if cmd_type != "speak":
@@ -1179,7 +1189,8 @@ class GameEngine:
                 if skill != "seer_check":
                     raise GameError("预言家需要选择查验目标")
                 if target is None:
-                    return [self._make_event("seer_result", seat, {"target": None, "skipped": True})]
+                    return [self._make_event(
+                        "seer_result", seat, {"target": None, "skipped": True}, visible_to=[seat])]
                 tp = st.player(target)
                 if not tp or not tp.alive:
                     raise GameError("目标无效")
@@ -1196,7 +1207,8 @@ class GameEngine:
                     if st.witch_save_used:
                         raise GameError("解药已使用")
                     if target is None:
-                        return [self._make_event("witch_action", seat, {"action": None, "skipped": True})]
+                        return [self._make_event(
+                            "witch_action", seat, {"action": None, "skipped": True}, visible_to=[seat])]
                     if target != st.witch_victim:
                         raise GameError("只能救被狼人击杀的玩家")
                     if target == seat and st.night != 1:
@@ -1206,7 +1218,8 @@ class GameEngine:
                 if st.witch_poison_used:
                     raise GameError("毒药已使用")
                 if target is None:
-                    return [self._make_event("witch_action", seat, {"action": None, "skipped": True})]
+                    return [self._make_event(
+                        "witch_action", seat, {"action": None, "skipped": True}, visible_to=[seat])]
                 tp = st.player(target)
                 if not tp or not tp.alive:
                     raise GameError("目标无效")
@@ -1463,8 +1476,9 @@ class GameEngine:
             info["can_shoot"] = st.pending_hunter == seat
         return info
 
-    def build_view(self, viewer_seat: int | None) -> dict:
+    def build_view(self, viewer_seat: int | None, viewer_is_admin: bool = False) -> dict:
         st = self.state
+        can_reveal_roles = st.roles_revealed or viewer_is_admin
         players = []
         for p in st.players:
             if p.controller_type == "empty":
@@ -1477,7 +1491,7 @@ class GameEngine:
                 "alive": p.alive,
                 "ready": p.ready,
                 "is_host": p.is_host,
-                "role": p.role if (st.roles_revealed or (viewer_seat == p.seat_number)) else None,
+                "role": p.role if (can_reveal_roles or (viewer_seat == p.seat_number)) else None,
                 "persona_name": p.persona_name,
             })
         me = None
@@ -1494,6 +1508,7 @@ class GameEngine:
         game = {
             "game_id": st.game_id,
             "board_size": st.board_size,
+            "role_setup": role_setup_for(st.board_size),
             "status": st.status,
             "phase": st.phase,
             "phase_label": PHASE_LABELS.get(st.phase, st.phase),
@@ -1519,7 +1534,7 @@ class GameEngine:
             "legal_targets": self.legal_targets_for(viewer_seat) if viewer_seat else [],
             "private": self.private_info_for(viewer_seat) if viewer_seat else {},
         }
-        if st.roles_revealed:
+        if can_reveal_roles:
             view["roles_revealed"] = {p.seat_number: p.role for p in st.players if p.role}
         return view
 

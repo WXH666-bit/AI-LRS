@@ -41,8 +41,8 @@ export default function HistoryPage() {
               <div>
                 <div className="font-bold">
                   {g.board_size}人局
-                  <span className={`ml-3 text-sm ${g.winner === "good" ? "text-sky-300" : "text-red-300"}`}>
-                    {g.winner === "good" ? "🏆 好人获胜" : "🐺 狼人获胜"}
+                  <span className={`ml-3 text-sm ${g.winner === "good" ? "text-sky-300" : g.winner === "wolf" ? "text-red-300" : "text-slate-400"}`}>
+                    {g.winner === "good" ? "🏆 好人获胜" : g.winner === "wolf" ? "🐺 狼人获胜" : "⏹️ 已结束"}
                   </span>
                 </div>
                 <div className="text-xs text-slate-500 mt-1">

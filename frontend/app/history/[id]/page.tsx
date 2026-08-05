@@ -60,8 +60,8 @@ export default function ReplayPage() {
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold">
             回放 · {data.game.board_size}人局
-            <span className={`ml-3 text-base ${data.game.winner === "good" ? "text-sky-300" : "text-red-300"}`}>
-              {data.game.winner === "good" ? "🏆 好人阵营获胜" : "🐺 狼人阵营获胜"}
+            <span className={`ml-3 text-base ${data.game.winner === "good" ? "text-sky-300" : data.game.winner === "wolf" ? "text-red-300" : "text-slate-400"}`}>
+              {data.game.winner === "good" ? "🏆 好人阵营获胜" : data.game.winner === "wolf" ? "🐺 狼人阵营获胜" : "⏹️ 已结束"}
             </span>
           </h1>
           <Link href="/history" className="btn-ghost">

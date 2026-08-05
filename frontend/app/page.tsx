@@ -66,11 +66,13 @@ export default function HomePage() {
               <h1 className="text-xl font-bold">
                 {game.board_size}人局 · <span className="text-amber-400">{STATUS_LABELS[game.status]}</span>
               </h1>
-              {game.winner && (
+              {game.winner ? (
                 <span className="text-sm">
                   {game.winner === "good" ? "🏆 好人阵营获胜" : "🐺 狼人阵营获胜"}
                   {game.is_host && <span className="ml-2 text-amber-400 text-xs">你是房主</span>}
                 </span>
+              ) : (
+                game.status === "ended" && <span className="text-sm text-slate-400">⏹️ 对局已结束</span>
               )}
             </div>
 

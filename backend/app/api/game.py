@@ -6,7 +6,7 @@ from ..database import SessionLocal
 from ..game.engine import GameError
 from ..models import Game, GameEvent, GamePlayer, User
 from ..schemas import AIFillIn, AISeatIn, CreateGameIn, JoinIn, ReadyIn, SpeedIn
-from .deps import require_user
+from .deps import require_admin, require_user
 from ..services.game_manager import manager
 
 router = APIRouter(tags=["game"])
@@ -167,6 +167,16 @@ async def start_game(user: User = Depends(require_user)):
         await manager._check_host(engine, user)
         async with engine.lock:
             await engine.start_game()
+    except GameError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    return {"ok": True}
+
+
+@router.post("/game/current/force-end")
+async def force_end(user: User = Depends(require_admin)):
+    """管理员强制结束当前对局。"""
+    try:
+        await manager.force_end("管理员强制结束")
     except GameError as e:
         raise HTTPException(status_code=400, detail=e.message)
     return {"ok": True}

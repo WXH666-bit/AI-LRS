@@ -177,6 +177,22 @@ export default function GamePage() {
           <span className={`ml-auto text-xs ${connected ? "text-emerald-400" : "text-red-400"}`}>
             {connected ? "● 已连接" : "○ 连接中断，重连中…"}
           </span>
+          {user.role === "admin" && g.status !== "ended" && (
+            <button
+              className="btn-danger text-xs px-3 py-1"
+              onClick={async () => {
+                if (confirm("确定强制结束当前对局？身份将立即揭晓。")) {
+                  try {
+                    await api("/game/current/force-end", { method: "POST" });
+                  } catch (err: any) {
+                    setToast(err.message || "操作失败");
+                  }
+                }
+              }}
+            >
+              强制结束
+            </button>
+          )}
           {canControl && (
             <div className="flex items-center gap-1.5">
               {g.status === "paused" ? (
@@ -273,7 +289,7 @@ export default function GamePage() {
           {isEnded ? (
             <div className="card p-6 text-center">
               <div className="text-2xl mb-2">
-                {g.winner === "good" ? "🏆 好人阵营获胜" : "🐺 狼人阵营获胜"}
+                {g.winner === "good" ? "🏆 好人阵营获胜" : g.winner === "wolf" ? "🐺 狼人阵营获胜" : "⏹️ 对局已结束"}
               </div>
               <p className="text-sm text-slate-400 mb-4">{g.end_reason}</p>
               <div className="grid grid-cols-2 gap-2 text-sm mb-4">

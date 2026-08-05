@@ -132,6 +132,47 @@ async def test_ai_seat_update_keeps_seat():
         pass
 
 
+async def test_ai_fill_free_persona_when_unspecified():
+    """AI 座位不指定人格时 = 自由发挥，不能自动落到数据库第一条人格。"""
+    engine = await make_game(6, seed=1)
+    async with engine.lock:
+        for p in engine.state.players:
+            assert p.persona_id is None
+            assert p.persona_name == "自由发挥"
+        # 显式指定人格才生效
+        async with SessionLocal() as db:
+            from app.models import AIPersona
+            persona = (await db.execute(select(AIPersona).order_by(AIPersona.id))).scalars().first()
+            pid = persona.id
+        await engine.ai_seat(1, "update", None, pid)
+        assert engine.state.player(1).persona_id == pid
+
+
+async def test_force_end():
+    """管理员强制结束：立即归档、揭晓身份、不计战绩。"""
+    engine = await make_game(6, seed=3)
+    with patch.object(GameEngine, "start_loop", new=AsyncMock()):
+        async with engine.lock:
+            await engine.start_game()
+        # force_end 内部自取锁，测试不能在锁内调用
+        await engine.force_end("管理员强制结束")
+        async with engine.lock:
+            st = engine.state
+            assert st.status == "ended"
+            assert st.winner is None
+            assert st.end_reason == "管理员强制结束"
+            assert st.roles_revealed is True
+            over = [e for e in engine.events if e["type"] == "game_over"]
+            assert len(over) == 1
+            assert over[0]["payload"]["winner"] is None
+        # 已结束的对局不能再强制结束
+        try:
+            await engine.force_end()
+            raise AssertionError("已结束对局不应允许强制结束")
+        except GameError:
+            pass
+
+
 # ============================================================ 幂等
 async def test_duplicate_request_id_ignored():
     engine = await make_game(6, seed=3)

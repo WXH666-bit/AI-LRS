@@ -74,22 +74,23 @@ class GameManager:
             return list(rows)
 
     # ---------------- 观战控制 ----------------
+    async def force_end(self, reason: str = "管理员强制结束") -> None:
+        engine = self._running_engine()
+        await engine.force_end(reason)
+
     async def pause(self, user) -> None:
         engine = self._running_engine()
         self._check_host(engine, user)
-        self._check_all_ai(engine)
         await engine.pause()
 
     async def resume(self, user) -> None:
         engine = self._running_engine()
         self._check_host(engine, user)
-        self._check_all_ai(engine)
         await engine.resume()
 
     async def speed(self, user, speed: int) -> None:
         engine = self._running_engine()
         self._check_host(engine, user)
-        self._check_all_ai(engine)
         await engine.set_speed(speed)
 
     def _running_engine(self) -> GameEngine:

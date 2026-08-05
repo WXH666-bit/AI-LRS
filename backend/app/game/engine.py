@@ -320,7 +320,9 @@ class GameEngine:
                 if not exists:
                     db.add(GameResult(game_id=st.game_id, winner=st.winner or "",
                                       summary={"reason": st.end_reason or ""}))
-                    await self._update_user_stats(db, st)
+                    # 强制结束（无胜方）不计入战绩
+                    if st.winner:
+                        await self._update_user_stats(db, st)
             if client_cmd:
                 db.add(ClientCommand(**client_cmd))
             await db.commit()
@@ -1626,11 +1628,10 @@ class GameEngine:
                 cfg = (await db.execute(
                     select(ModelConfig).where(ModelConfig.enabled.is_(True))
                     .order_by(ModelConfig.is_default_fallback.desc(), ModelConfig.id))).scalars().first()
+            # persona_id 为空 = 自由发挥（不绑定任何人格）；显式指定才使用该人格
             persona = None
             if persona_id:
                 persona = await db.get(AIPersona, persona_id)
-            if persona is None:
-                persona = (await db.execute(select(AIPersona).order_by(AIPersona.id))).scalars().first()
         if cfg is None:
             raise GameError("尚未配置可用模型，请先到后台添加模型配置")
         p.model_config_id = cfg.id
@@ -1699,6 +1700,18 @@ class GameEngine:
             await db.commit()
 
     # ============================================================ 观战控制
+    async def force_end(self, reason: str = "管理员强制结束") -> None:
+        """管理员强制结束对局：立即归档并揭晓身份。"""
+        async with self.lock:
+            st = self.state
+            if st.status not in ("running", "paused"):
+                raise GameError("对局不在进行中")
+            await self._emit([self._make_event("game_over", None, {
+                "winner": None,
+                "reason": reason,
+                "roles": {p.seat_number: p.role for p in st.players if p.role},
+            })])
+
     async def set_speed(self, speed: int) -> None:
         async with self.lock:
             if speed not in (1, 2, 3):

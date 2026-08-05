@@ -1,4 +1,4 @@
-import { WS_BASE } from "./api";
+import { api, WS_BASE } from "./api";
 import type { GameEvent, GameView } from "./types";
 
 export interface WsCallbacks {
@@ -23,19 +23,29 @@ export class GameClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private retryCount = 0;
+  private token: string | null = null;
 
   constructor(cb: WsCallbacks) {
     this.cb = cb;
   }
 
-  connect() {
+  /** 跨源 WebSocket 不携带 Cookie，先取会话 token 拼到 URL。 */
+  async connect() {
     this.closed = false;
-    this.open();
+    try {
+      const { token } = await api<{ token: string }>("/auth/ws-token");
+      this.token = token;
+      this.open();
+    } catch {
+      this.cb.onError("无法获取会话令牌，请重新登录");
+      this.cb.onStatus(false);
+    }
   }
 
   private open() {
     try {
-      this.ws = new WebSocket(`${WS_BASE}/ws/game/current`);
+      const url = this.token ? `${WS_BASE}/ws/game/current?token=${encodeURIComponent(this.token)}` : `${WS_BASE}/ws/game/current`;
+      this.ws = new WebSocket(url);
     } catch {
       this.scheduleReconnect();
       return;

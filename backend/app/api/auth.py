@@ -1,7 +1,10 @@
 """账号：注册、登录、退出、当前用户。"""
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 
+from ..config import settings
 from ..database import SessionLocal
 from ..models import SessionToken, User
 from ..schemas import LoginIn, RegisterIn
@@ -59,3 +62,16 @@ async def me(request: Request):
     if user is None:
         return {"user": None}
     return {"user": user_dict(user)}
+
+
+@router.get("/ws-token")
+async def ws_token(request: Request):
+    """返回当前会话 token 供 WebSocket URL 使用（跨源 WS 不携带 Cookie）。"""
+    token = request.cookies.get(settings.cookie_name)
+    if not token:
+        raise HTTPException(status_code=401, detail="请先登录")
+    async with SessionLocal() as db:
+        row = await db.get(SessionToken, token)
+        if row is None or row.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=401, detail="会话已过期")
+    return {"token": token}

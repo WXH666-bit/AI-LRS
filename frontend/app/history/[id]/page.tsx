@@ -36,8 +36,13 @@ export default function ReplayPage() {
   const lines = useMemo(() => {
     if (!data) return [];
     return data.events
-      .map((e) => ({ ...formatEvent(e), raw: e }))
-      .filter((l) => l !== null) as (DisplayLine & { raw: GameEvent })[];
+      .map((e) => {
+        const line = formatEvent(e);
+        return line ? { ...line, raw: e } : null;
+      })
+      .filter((l): l is DisplayLine & { raw: GameEvent } => l !== null)
+      // 相邻重复的阶段行只保留一条（每个行动窗口都会发 phase_change）
+      .filter((l, i, arr) => !(l.kind === "phase" && i > 0 && arr[i - 1].kind === "phase" && arr[i - 1].text === l.text));
   }, [data]);
 
   const roles = useMemo(

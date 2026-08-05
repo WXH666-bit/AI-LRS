@@ -42,10 +42,17 @@ export default function GamePage() {
           const known = new Set(prev.map((e) => e.seq));
           const fresh = evs
             .map((e) => formatEvent(e))
-            .filter((l): l is DisplayLine => l !== null && !known.has(l.seq))
-            // 相邻重复的阶段行（每个行动窗口都会发 phase_change）只保留一条
-            .filter((l, i, arr) => !(l.kind === "phase" && i > 0 && arr[i - 1].kind === "phase" && arr[i - 1].text === l.text));
-          return [...prev, ...fresh];
+            .filter((l): l is DisplayLine => l !== null && !known.has(l.seq));
+          // 相邻重复的阶段行（每个行动窗口都会发 phase_change）只保留一条，
+          // 需跨批次比较（prev 的最后一条与 fresh 的第一条）
+          const deduped: DisplayLine[] = [];
+          for (const l of fresh) {
+            const last = deduped.length ? deduped[deduped.length - 1] : prev[prev.length - 1];
+            if (!(l.kind === "phase" && last?.kind === "phase" && last?.text === l.text)) {
+              deduped.push(l);
+            }
+          }
+          return [...prev, ...deduped];
         }),
       onView: (v) => setView(v),
       onError: (msg) => {
@@ -63,7 +70,7 @@ export default function GamePage() {
       onStatus: setConnected,
     });
     clientRef.current = client;
-    client.connect();
+    void client.connect();
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       clearInterval(tick);

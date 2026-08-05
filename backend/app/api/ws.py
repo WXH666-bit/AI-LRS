@@ -13,7 +13,10 @@ router = APIRouter(tags=["ws"])
 
 
 async def _auth_user(ws: WebSocket) -> User | None:
+    """认证：优先 HttpOnly Cookie；跨源 WebSocket 浏览器不携带 Cookie，支持 ?token= 查询参数。"""
     token = ws.cookies.get(settings.cookie_name)
+    if not token:
+        token = ws.query_params.get("token")
     if not token:
         return None
     async with SessionLocal() as db:

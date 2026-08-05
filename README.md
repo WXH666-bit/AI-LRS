@@ -16,7 +16,10 @@
 ```cmd
 setup.cmd     # 首次安装：.venv + 后端依赖 + 前端依赖
 start.cmd     # 启动：后端(8000) + 前端(3000)
+python run.py # 推荐：使用项目 .venv 一键启动后端 + 前端
 ```
+
+`run.py` 会自动切换到项目 `.venv` 的 Python，并在当前窗口管理前后端进程；按 `Ctrl+C` 会同时停止两者。可用 `python run.py --check` 只检查启动环境。
 
 浏览器打开 http://localhost:3000 。
 

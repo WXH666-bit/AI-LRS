@@ -1274,7 +1274,8 @@ class GameEngine:
         kind = st.window_kind or ""
         if not result or not isinstance(result, dict):
             return [self._fallback_command(seat)]
-        action = str(result.get("action_type") or result.get("action") or "pass")
+        raw_action = result.get("action_type") or result.get("action")
+        action = str(raw_action).strip().lower() if raw_action else ""
         text = str(result.get("speech") or "").strip()
         chat = str(result.get("chat_message") or "").strip()
         target = result.get("target_seat_number")
@@ -1284,7 +1285,9 @@ class GameEngine:
         if kind in SPEECH_WINDOWS:
             if action in ("speak", "speech") and text:
                 return [("speak", {"text": text})]
-            return [("pass", {})]
+            if action in ("pass", "skip"):
+                return [("pass", {})]
+            return [self._fallback_command(seat)]
         if kind in VOTE_WINDOWS:
             if action == "vote" and isinstance(target, int) and target > 0:
                 return [("vote", {"target": target})]
@@ -1335,7 +1338,18 @@ class GameEngine:
 
     def _fallback_command(self, seat: int) -> tuple[str, dict]:
         """模型彻底失败时的确定性兜底：弃权/跳过。"""
+        if self.state.window_kind in SPEECH_WINDOWS:
+            return ("speak", {"text": self._fallback_speech(seat)})
         return ("pass", {})
+
+    def _fallback_speech(self, seat: int) -> str:
+        """模型异常时使用的最小公开发言，避免失败直接变成跳过。"""
+        kind = self.state.window_kind
+        if kind == "last_words":
+            return f"{seat}号遗言：我先把公开信息说明白，大家结合发言和投票自行判断。"
+        if kind in ("election_speak", "election_pk_speak", "lynch_pk_speak"):
+            return f"{seat}号发言：我会围绕发言和投票逻辑判断，不盲目跟票，先听完其他人的意见。"
+        return f"{seat}号发言：我会结合昨夜信息、发言和投票逻辑判断身份，目前先保留意见，听完后续再做决定。"
 
     # ============================================================ 可见信息
     def legal_actions_for(self, seat: int) -> list[dict]:

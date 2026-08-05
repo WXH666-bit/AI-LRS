@@ -19,10 +19,21 @@ const EMPTY_FORM = {
   is_default_fallback: false,
 };
 
+const TIMEOUT_PRESETS = [30, 60, 90, 120, 180] as const;
+const CUSTOM_TIMEOUT = "custom";
+type TimeoutMode = `${(typeof TIMEOUT_PRESETS)[number]}` | typeof CUSTOM_TIMEOUT;
+
+function timeoutChoice(seconds: number): TimeoutMode {
+  return TIMEOUT_PRESETS.includes(seconds as (typeof TIMEOUT_PRESETS)[number])
+    ? String(seconds) as TimeoutMode
+    : CUSTOM_TIMEOUT;
+}
+
 export default function AdminModelsPage() {
   const { user, loading } = useUser();
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [timeoutMode, setTimeoutMode] = useState<TimeoutMode>(timeoutChoice(EMPTY_FORM.timeout_seconds));
   const [editingId, setEditingId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,6 +69,7 @@ export default function AdminModelsPage() {
         await api("/admin/model-configs", { method: "POST", body: JSON.stringify(body) });
       }
       setForm({ ...EMPTY_FORM });
+      setTimeoutMode(timeoutChoice(EMPTY_FORM.timeout_seconds));
       setEditingId(null);
       await load();
     } catch (err: any) {
@@ -119,8 +131,34 @@ export default function AdminModelsPage() {
                 <input className="input" type="number" step="0.1" min="0" max="2" value={form.temperature} onChange={(e) => setForm({ ...form, temperature: Number(e.target.value) })} />
               </div>
               <div>
-                <label className="label">超时(秒)</label>
-                <input className="input" type="number" min="1" max="300" value={form.timeout_seconds} onChange={(e) => setForm({ ...form, timeout_seconds: Number(e.target.value) })} />
+                <label className="label">超时（秒）</label>
+                <select
+                  className="input"
+                  value={timeoutMode}
+                  onChange={(e) => {
+                    const value = e.target.value as TimeoutMode;
+                    setTimeoutMode(value);
+                    if (value !== CUSTOM_TIMEOUT) {
+                      setForm({ ...form, timeout_seconds: Number(value) });
+                    }
+                  }}
+                >
+                  {TIMEOUT_PRESETS.map((seconds) => (
+                    <option key={seconds} value={seconds}>{seconds} 秒</option>
+                  ))}
+                  <option value={CUSTOM_TIMEOUT}>自定义</option>
+                </select>
+                {timeoutMode === CUSTOM_TIMEOUT && (
+                  <input
+                    className="input mt-2"
+                    type="number"
+                    min="1"
+                    max="300"
+                    value={form.timeout_seconds}
+                    onChange={(e) => setForm({ ...form, timeout_seconds: Number(e.target.value) })}
+                    aria-label="自定义超时（秒）"
+                  />
+                )}
               </div>
               <div>
                 <label className="label">Max Tokens</label>
@@ -142,7 +180,7 @@ export default function AdminModelsPage() {
           <div className="flex gap-2">
             <button className="btn-primary" disabled={busy}>{editingId ? "保存修改" : "添加模型"}</button>
             {editingId && (
-              <button type="button" className="btn-ghost" onClick={() => { setEditingId(null); setForm({ ...EMPTY_FORM }); }}>
+              <button type="button" className="btn-ghost" onClick={() => { setEditingId(null); setForm({ ...EMPTY_FORM }); setTimeoutMode(timeoutChoice(EMPTY_FORM.timeout_seconds)); }}>
                 取消
               </button>
             )}
@@ -179,6 +217,7 @@ export default function AdminModelsPage() {
                   className="btn-ghost text-xs"
                   onClick={() => {
                     setEditingId(m.id);
+                    setTimeoutMode(timeoutChoice(m.timeout_seconds));
                     setForm({
                       display_name: m.display_name,
                       protocol: m.protocol,

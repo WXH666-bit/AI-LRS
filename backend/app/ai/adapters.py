@@ -147,6 +147,8 @@ async def test_connection(cfg: ModelConfig, api_key: str) -> dict:
             user="请只回复：连接成功",
             temperature=0, max_tokens=16)
         latency = int((time.monotonic() - start) * 1000)
+        if not content.strip():
+            return {"ok": False, "latency_ms": latency, "message": "连接成功但模型响应为空"}
         return {"ok": True, "latency_ms": latency, "message": f"连接成功（{latency}ms），响应：{content[:50]}"}
     except ModelCallError as e:
         latency = int((time.monotonic() - start) * 1000)

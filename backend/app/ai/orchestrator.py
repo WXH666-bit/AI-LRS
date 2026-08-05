@@ -17,6 +17,16 @@ from .prompts import build_prompts
 
 logger = logging.getLogger("game.ai")
 
+_SPEECH_WINDOWS = frozenset({
+    "speech", "election_speak", "election_pk_speak", "lynch_pk_speak", "last_words",
+})
+
+
+def _response_token_budget(window_kind: str | None, configured: int) -> int:
+    """限制单回合输出，避免长回复超时或在 JSON 中途被截断。"""
+    ceiling = 512 if window_kind in _SPEECH_WINDOWS else 256
+    return max(64, min(configured or ceiling, ceiling))
+
 
 class AIOrchestrator:
     def __init__(self) -> None:
@@ -51,7 +61,9 @@ class AIOrchestrator:
                 api_key = decrypt_secret(cfg.encrypted_api_key)
                 system, user = build_prompts(engine, seat, request, persona)
 
-                result, error_kind, error_msg, usage = await self._call_with_retry(cfg, api_key, system, user)
+                max_tokens = _response_token_budget(request.get("window_kind"), cfg.max_output_tokens)
+                result, error_kind, error_msg, usage = await self._call_with_retry(
+                    cfg, api_key, system, user, max_tokens=max_tokens)
 
                 duration_ms = int((time.monotonic() - start) * 1000)
                 await self._log_call(game_id, seat, phase, cfg, result, error_kind, error_msg, duration_ms, usage)
@@ -85,7 +97,8 @@ class AIOrchestrator:
         async with SessionLocal() as db:
             return await db.get(AIPersona, persona_id)
 
-    async def _call_with_retry(self, cfg: ModelConfig, api_key: str, system: str, user: str
+    async def _call_with_retry(self, cfg: ModelConfig, api_key: str, system: str, user: str,
+                               max_tokens: int | None = None
                                ) -> tuple[dict | None, str, str, dict]:
         """最多重试一次；JSON 解析失败时修复一次。返回 (解析结果, error_kind, error_msg, usage)。"""
         last_kind, last_msg = "", ""
@@ -93,7 +106,8 @@ class AIOrchestrator:
         content: str | None = None
         for attempt in range(settings.ai_max_retries + 1):
             try:
-                content, usage = await call_model(cfg, api_key, system, user)
+                content, usage = await call_model(
+                    cfg, api_key, system, user, max_tokens=max_tokens)
                 parsed = parse_ai_json(content)
                 if parsed is not None:
                     return parsed, "", "", usage

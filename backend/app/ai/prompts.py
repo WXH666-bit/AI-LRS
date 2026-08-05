@@ -169,7 +169,7 @@ def build_prompts(engine, seat: int, request: dict, persona: AIPersona | None) -
     user_lines.append("【公开状态】")
     alive = [f"{s}号" for s in st.alive_seats()]
     user_lines.append(f"- 存活：{'、'.join(alive)}")
-    dead = [f"{s}号" for s in st.players if not s.alive]
+    dead = [f"{p.seat_number}号" for p in st.players if not p.alive]
     if dead:
         user_lines.append(f"- 已出局：{'、'.join(dead)}")
     user_lines.append(f"- 警长：{st.sheriff_seat}号" if st.sheriff_seat else "- 当前无警长")

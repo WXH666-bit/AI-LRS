@@ -21,3 +21,7 @@ data/*.db-shm
 .idea/
 .vscode/
 .playwright-mcp/
+
+# Local agent notes and planning documents
+.claude/
+docs/

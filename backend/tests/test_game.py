@@ -100,7 +100,7 @@ async def drive_until_phase(engine, phase: str):
             acted = False
             for seat in st.acting_seats:
                 p = st.player(seat)
-                if p and p.controller_type == "ai":
+                if p and p.controller_type == "ai" and not engine._seat_window_complete(seat):
                     await stub_act(engine, seat, rng)
                     acted = True
             if not acted:
@@ -445,7 +445,7 @@ async def test_human_timeout_then_trustee():
                 acted = False
                 for seat in st.acting_seats:
                     p = st.player(seat)
-                    if p and p.controller_type == "ai":
+                    if p and p.controller_type == "ai" and not engine._seat_window_complete(seat):
                         await stub_act(engine, seat, rng)
                         acted = True
                         break
@@ -468,7 +468,7 @@ async def test_human_timeout_then_trustee():
                 acted = False
                 for seat in st.acting_seats:
                     p = st.player(seat)
-                    if p and p.controller_type == "ai":
+                    if p and p.controller_type == "ai" and not engine._seat_window_complete(seat):
                         await stub_act(engine, seat, rng)
                         acted = True
                         break
@@ -567,7 +567,7 @@ async def test_snapshot_recovery():
                     break
                 for seat in st.acting_seats:
                     p = st.player(seat)
-                    if p and p.controller_type == "ai":
+                    if p and p.controller_type == "ai" and not engine._seat_window_complete(seat):
                         await stub_act(engine, seat, rng)
         async with engine.lock:
             st = engine.state

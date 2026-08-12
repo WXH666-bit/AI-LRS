@@ -5,10 +5,11 @@
 """
 import json
 import re
+import asyncio
 from datetime import datetime
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 
 app = FastAPI()
@@ -31,6 +32,8 @@ def decide(prompt: str) -> dict:
     if window == "狼人杀人":
         targets = extract_targets(prompt)
         return {"action_type": "wolf_kill", "target_seat_number": targets[0]} if targets else {"action_type": "pass"}
+    if window == "狼人私聊":
+        return {"action_type": "chat", "chat_message": "先听完队友判断，再统一选择最稳妥的目标。"}
     if window == "猎人开枪":
         targets = extract_targets(prompt)
         return {"action_type": "shoot", "target_seat_number": targets[0]} if targets else {"action_type": "pass"}
@@ -70,10 +73,21 @@ async def chat(request: Request):
     for msg in body.get("messages", []):
         prompt += msg.get("content", "") + "\n"
     result = decide(prompt)
+    content = json.dumps(result, ensure_ascii=False)
+    if body.get("stream"):
+        async def event_stream():
+            for index in range(0, len(content), 8):
+                piece = content[index:index + 8]
+                chunk = {"choices": [{"index": 0, "delta": {"content": piece}}]}
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.02)
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
     return JSONResponse({
         "id": "mock-" + str(datetime.now().timestamp()),
         "object": "chat.completion",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": json.dumps(result, ensure_ascii=False)}}],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}}],
         "usage": {"prompt_tokens": 100, "completion_tokens": 30},
     })
 

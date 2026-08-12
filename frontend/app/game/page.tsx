@@ -12,7 +12,7 @@ import Panel from "@/components/ui/Panel";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { api } from "@/lib/api";
 import { formatEvent, roleLabel, type DisplayLine } from "@/lib/formatEvent";
-import type { GameView, LegalAction } from "@/lib/types";
+import type { AIStreamUpdate, GameView, LegalAction } from "@/lib/types";
 import { useUser } from "@/lib/useUser";
 import { GameClient } from "@/lib/ws";
 
@@ -21,6 +21,7 @@ export default function GamePage() {
   const router = useRouter();
   const [view, setView] = useState<GameView | null>(null);
   const [events, setEvents] = useState<DisplayLine[]>([]);
+  const [streams, setStreams] = useState<Record<string, AIStreamUpdate>>({});
   const [connected, setConnected] = useState(false);
   const [toast, setToast] = useState("");
   const [speech, setSpeech] = useState("");
@@ -34,17 +35,50 @@ export default function GamePage() {
   useEffect(() => {
     if (!user) return;
     const client = new GameClient({
-      onEvents: (incoming) => setEvents((previous) => {
-        const known = new Set(previous.map((event) => event.seq));
-        const fresh = incoming
-          .map((event) => formatEvent(event))
-          .filter((line): line is DisplayLine => line !== null && !known.has(line.seq));
-        const deduped: DisplayLine[] = [];
-        for (const line of fresh) {
-          const last = deduped.length ? deduped[deduped.length - 1] : previous[previous.length - 1];
-          if (!(line.kind === "phase" && last?.kind === "phase" && last.text === line.text)) deduped.push(line);
-        }
-        return [...previous, ...deduped];
+      onEvents: (incoming) => {
+        setStreams((previous) => {
+          const next = { ...previous };
+          const speechKinds: Record<string, string> = {
+            speech: "speech",
+            election_speech: "election_speak",
+            election_pk_speech: "election_pk_speak",
+            lynch_pk_speech: "lynch_pk_speak",
+            last_words: "last_words",
+            wolf_chat: "wolf_chat",
+          };
+          incoming.filter((event) => speechKinds[event.type]).forEach((event) => {
+            Object.entries(next).forEach(([id, stream]) => {
+              if (stream.actor_seat === event.actor_seat && stream.window_kind === speechKinds[event.type]) {
+                delete next[id];
+              }
+            });
+          });
+          return next;
+        });
+        setEvents((previous) => {
+          const known = new Set(previous.map((event) => event.seq));
+          const fresh = incoming
+            .map((event) => formatEvent(event))
+            .filter((line): line is DisplayLine => line !== null && !known.has(line.seq));
+          const deduped: DisplayLine[] = [];
+          for (const line of fresh) {
+            const last = deduped.length ? deduped[deduped.length - 1] : previous[previous.length - 1];
+            if (!(line.kind === "phase" && last?.kind === "phase" && last.text === line.text)) deduped.push(line);
+          }
+          return [...previous, ...deduped];
+        });
+      },
+      onStream: (update) => setStreams((previous) => {
+        const current = previous[update.stream_id];
+        const nextText = update.status === "retry"
+          ? ""
+          : update.status === "chunk"
+            ? `${current?.text || ""}${update.text}`
+            : update.text || current?.text || "";
+        return {
+          ...previous,
+          [update.stream_id]: { ...update, text: nextText },
+        };
       }),
       onView: (nextView) => setView(nextView),
       onError: (message) => {
@@ -137,6 +171,9 @@ export default function GamePage() {
   }
 
   const currentEvents = tab === "wolf" ? wolfEvents : publicEvents;
+  const currentStreams = Object.values(streams).filter((stream) => (
+    tab === "wolf" ? stream.window_kind === "wolf_chat" : stream.window_kind !== "wolf_chat"
+  ));
 
   return (
     <div className="min-h-screen">
@@ -173,7 +210,11 @@ export default function GamePage() {
             </div>
             <div ref={logRef} className="flex-1 space-y-2 overflow-y-auto p-4 sm:p-6">
               {currentEvents.map((event, index) => <EventEntry key={event.seq} event={event} isLatest={index === currentEvents.length - 1} />)}
-              {currentEvents.length === 0 && <div className="flex min-h-[360px] items-center justify-center text-sm text-smoke">这一条频道暂时没有消息。</div>}
+              {currentStreams.map((stream) => <div key={stream.stream_id} aria-live="polite" className={`rounded-xl border px-4 py-3 text-sm ${tab === "wolf" ? "border-[#9b78c5]/30 bg-[#9b78c5]/10 text-[#d7c6eb]" : "border-gold/20 bg-gold/5 text-bone"}`}>
+                <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-smoke">{stream.status === "retry" ? "正在重试" : "正在生成"} · {stream.actor_seat}号</div>
+                <div>{stream.text || "模型正在组织内容…"}</div>
+              </div>)}
+              {currentEvents.length === 0 && currentStreams.length === 0 && <div className="flex min-h-[360px] items-center justify-center text-sm text-smoke">这一条频道暂时没有消息。</div>}
             </div>
           </Panel>
         </div>

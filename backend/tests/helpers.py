@@ -110,8 +110,11 @@ async def stub_act(engine: GameEngine, seat: int, rng) -> None:
             await engine._apply_command("use_skill", {"skill": "wolf_kill", "target": targets[0]["seat"]}, seat, None)
         else:
             await engine._apply_command("use_skill", {"skill": "wolf_kill", "target": 0}, seat, None)
+    elif kind == "wolf_chat":
+        await engine._apply_command("wolf_chat", {"text": f"{seat}号先听取队友意见。"}, seat, None)
     elif kind == "night_skill":
-        step = st.night_step
+        player = st.player(seat)
+        step = player.role if st.night_step == "skills" and player else st.night_step
         if step == "guard":
             if targets:
                 await engine._apply_command("use_skill", {"skill": "guard_protect", "target": targets[0]["seat"]}, seat, None)
@@ -160,12 +163,19 @@ async def drive_game(engine: GameEngine, max_actions: int = 5000) -> None:
             acted = False
             for seat in st.acting_seats:
                 p = st.player(seat)
-                if p and p.controller_type == "ai":
+                if p and p.controller_type == "ai" and not engine._seat_window_complete(seat):
                     await stub_act(engine, seat, rng)
                     acted = True
             if not acted:
                 return
-    raise AssertionError(f"对局未在 {max_actions} 次行动内结束")
+    st = engine.state
+    raise AssertionError(
+        f"对局未在 {max_actions} 次行动内结束：phase={st.phase}, "
+        f"night_step={st.night_step}, window={st.window_kind}, "
+        f"acting={st.acting_seats}, wolf_chat_done={st.wolf_chat_done}, "
+        f"wolf_votes={st.wolf_votes}, flags=(guard={st.guard_acted}, "
+        f"seer={st.seer_acted}, witch={st.witch_acted})"
+    )
 
 
 async def simulate_game(board_size: int, seed: int = 1) -> GameEngine:

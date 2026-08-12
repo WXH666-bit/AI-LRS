@@ -3,16 +3,16 @@
 模型调用期间不持有游戏状态锁；过期结果（阶段已变）直接丢弃。
 """
 import asyncio
+import json
 import logging
+import re
 import time
-
-from sqlalchemy import select
 
 from ..config import settings
 from ..database import SessionLocal
 from ..models import AIPersona, ModelCallLog, ModelConfig
 from ..security import decrypt_secret
-from .adapters import ModelCallError, call_model, parse_ai_json
+from .adapters import ModelCallError, call_model, call_model_stream, parse_ai_json
 from .prompts import build_prompts
 
 logger = logging.getLogger("game.ai")
@@ -24,8 +24,38 @@ _SPEECH_WINDOWS = frozenset({
 
 def _response_token_budget(window_kind: str | None, configured: int) -> int:
     """限制单回合输出，避免长回复超时或在 JSON 中途被截断。"""
-    ceiling = 512 if window_kind in _SPEECH_WINDOWS else 256
+    if window_kind in _SPEECH_WINDOWS:
+        ceiling = 320
+    elif window_kind == "wolf_chat":
+        ceiling = 160
+    else:
+        ceiling = 128
     return max(64, min(configured or ceiling, ceiling))
+
+
+def _extract_json_string_field(raw: str, field: str) -> str:
+    """从尚未闭合的 JSON 中提取可展示的字符串字段。"""
+    match = re.search(rf'"{re.escape(field)}"\s*:\s*"', raw)
+    if not match:
+        return ""
+    start = match.end()
+    escaped = False
+    end = len(raw)
+    for index in range(start, len(raw)):
+        char = raw[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+        elif char == '"':
+            end = index
+            break
+    fragment = raw[start:end]
+    try:
+        return json.loads(f'"{fragment}"')
+    except json.JSONDecodeError:
+        return fragment.replace('\\"', '"').replace("\\n", "\n")
 
 
 class AIOrchestrator:
@@ -61,9 +91,58 @@ class AIOrchestrator:
                 api_key = decrypt_secret(cfg.encrypted_api_key)
                 system, user = build_prompts(engine, seat, request, persona)
 
-                max_tokens = _response_token_budget(request.get("window_kind"), cfg.max_output_tokens)
+                window_kind = request.get("window_kind") or ""
+                stream_field = (
+                    "speech" if window_kind in _SPEECH_WINDOWS
+                    else "chat_message" if window_kind == "wolf_chat"
+                    else None
+                )
+                stream_id = f"ai:{game_id}:{token}:{seat}"
+                raw_stream = ""
+                shown_stream = ""
+
+                async def on_delta(delta: str) -> None:
+                    nonlocal raw_stream, shown_stream
+                    raw_stream += delta
+                    if not stream_field:
+                        return
+                    extracted = _extract_json_string_field(raw_stream, stream_field)
+                    if not extracted:
+                        return
+                    if extracted.startswith(shown_stream):
+                        chunk = extracted[len(shown_stream):]
+                    else:
+                        # 模型偶尔会修正已输出片段，前端以当前累计文本覆盖。
+                        chunk = extracted
+                    shown_stream = extracted
+                    await engine.emit_ai_stream(seat, token, stream_id, chunk, "chunk")
+
+                async def on_retry() -> None:
+                    nonlocal raw_stream, shown_stream
+                    raw_stream = ""
+                    shown_stream = ""
+                    if stream_field:
+                        await engine.emit_ai_stream(seat, token, stream_id, "", "retry")
+
+                max_tokens = _response_token_budget(window_kind, cfg.max_output_tokens)
                 result, error_kind, error_msg, usage = await self._call_with_retry(
-                    cfg, api_key, system, user, max_tokens=max_tokens)
+                    cfg,
+                    api_key,
+                    system,
+                    user,
+                    max_tokens=max_tokens,
+                    on_delta=on_delta if stream_field else None,
+                    on_retry=on_retry if stream_field else None,
+                )
+
+                if stream_field:
+                    await engine.emit_ai_stream(
+                        seat,
+                        token,
+                        stream_id,
+                        shown_stream if result is not None else "",
+                        "complete" if result is not None else "fallback",
+                    )
 
                 duration_ms = int((time.monotonic() - start) * 1000)
                 await self._log_call(game_id, seat, phase, cfg, result, error_kind, error_msg, duration_ms, usage)
@@ -81,15 +160,12 @@ class AIOrchestrator:
                 pass
 
     async def _resolve_config(self, cfg_id: int | None) -> ModelConfig | None:
+        """只解析座位绑定的配置，不在行动失败时切换备用模型。"""
+        if not cfg_id:
+            return None
         async with SessionLocal() as db:
-            cfg = None
-            if cfg_id:
-                cfg = await db.get(ModelConfig, cfg_id)
-            if cfg is None or not cfg.enabled:
-                cfg = (await db.execute(
-                    select(ModelConfig).where(ModelConfig.enabled.is_(True))
-                    .order_by(ModelConfig.is_default_fallback.desc(), ModelConfig.id))).scalars().first()
-            return cfg
+            cfg = await db.get(ModelConfig, cfg_id)
+            return cfg if cfg and cfg.enabled else None
 
     async def _load_persona(self, persona_id: int | None) -> AIPersona | None:
         if not persona_id:
@@ -98,16 +174,25 @@ class AIOrchestrator:
             return await db.get(AIPersona, persona_id)
 
     async def _call_with_retry(self, cfg: ModelConfig, api_key: str, system: str, user: str,
-                               max_tokens: int | None = None
+                               max_tokens: int | None = None,
+                               on_delta=None,
+                               on_retry=None,
                                ) -> tuple[dict | None, str, str, dict]:
-        """最多重试一次；JSON 解析失败时修复一次。返回 (解析结果, error_kind, error_msg, usage)。"""
+        """在同一模型上有限重试；支持文本窗口的流式增量。"""
         last_kind, last_msg = "", ""
         usage: dict = {}
         content: str | None = None
-        for attempt in range(settings.ai_max_retries + 1):
+        retry_count = min(max(int(settings.ai_max_retries), 0), 2)
+        for attempt in range(retry_count + 1):
+            if attempt and on_retry:
+                await on_retry()
             try:
-                content, usage = await call_model(
-                    cfg, api_key, system, user, max_tokens=max_tokens)
+                if on_delta:
+                    content, usage = await call_model_stream(
+                        cfg, api_key, system, user, on_delta, max_tokens=max_tokens)
+                else:
+                    content, usage = await call_model(
+                        cfg, api_key, system, user, max_tokens=max_tokens)
                 parsed = parse_ai_json(content)
                 if parsed is not None:
                     return parsed, "", "", usage
@@ -117,7 +202,8 @@ class AIOrchestrator:
             except ModelCallError as e:
                 last_kind, last_msg = e.kind, e.message
                 content = None
-                await asyncio.sleep(0.5)
+                if attempt < retry_count:
+                    await asyncio.sleep(0.5)
         return None, last_kind or "error", last_msg, usage
 
     async def _log_call(self, game_id: int, seat: int, phase: str, cfg: ModelConfig,

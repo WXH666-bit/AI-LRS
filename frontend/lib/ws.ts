@@ -1,9 +1,10 @@
 import { api, WS_BASE } from "./api";
-import type { GameEvent, GameView } from "./types";
+import type { AIStreamUpdate, GameEvent, GameView } from "./types";
 
 export interface WsCallbacks {
   onEvents: (events: GameEvent[]) => void;
   onView: (view: GameView) => void;
+  onStream: (update: AIStreamUpdate) => void;
   onError: (message: string) => void;
   onStatus: (connected: boolean) => void;
 }
@@ -101,6 +102,8 @@ export class GameClient {
       }
     } else if (msg.type === "view") {
       this.cb.onView(msg.view as GameView);
+    } else if (msg.type === "ai_stream") {
+      this.cb.onStream(msg as AIStreamUpdate);
     } else if (msg.type === "error") {
       this.cb.onError(msg.message || "操作失败");
     } else if (msg.type === "pong") {

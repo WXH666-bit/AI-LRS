@@ -25,3 +25,4 @@ data/*.db-shm
 # Local agent notes and planning documents
 .claude/
 docs/
+.agents/

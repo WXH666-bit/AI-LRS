@@ -61,10 +61,11 @@ class GameState:
     ai_delay_until: float = 0.0
 
     # —— 夜晚 ——
-    night_step: str | None = None  # wolf_kill | guard | seer | witch | resolve
+    night_step: str | None = None  # wolf_chat | wolf_kill | skills | guard | seer | witch | resolve
     wolf_votes: dict[int, int] = field(default_factory=dict)  # seat -> target (0=空刀)
     wolf_kill_target: int | None = None
     wolf_chat: list[dict] = field(default_factory=list)  # {seat, text}
+    wolf_chat_done: list[int] = field(default_factory=list)  # 本夜已完成私聊回合的狼人座位
     guard_target: int | None = None
     guard_prev_target: int | None = None
     guard_acted: bool = False
@@ -138,6 +139,7 @@ class GameState:
             "wolf_votes": dict(self.wolf_votes),
             "wolf_kill_target": self.wolf_kill_target,
             "wolf_chat": [dict(x) for x in self.wolf_chat],
+            "wolf_chat_done": list(self.wolf_chat_done),
             "guard_target": self.guard_target,
             "guard_prev_target": self.guard_prev_target,
             "guard_acted": self.guard_acted,
@@ -189,7 +191,7 @@ class GameState:
         for k, v in d.items():
             if k == "players":
                 st.players = [PlayerState.from_dict(p) for p in v]
-            elif k in ("acting_seats", "candidates", "speech_order", "election_pk", "lynch_pk"):
+            elif k in ("acting_seats", "candidates", "speech_order", "election_pk", "lynch_pk", "wolf_chat_done"):
                 setattr(st, k, list(v))
             elif k in ("election_applies", "election_votes", "election_pk_votes", "lynch_votes", "lynch_pk_votes", "wolf_votes"):
                 setattr(st, k, {int(s): t for s, t in v.items()})

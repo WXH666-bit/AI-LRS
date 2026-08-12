@@ -88,16 +88,39 @@ def _phase_event_line(ev: dict) -> str | None:
     return None
 
 
-def format_history(engine, seat: int, limit: int = 80) -> str:
-    """本座位可见的事件流（公开 + 私有）。"""
-    lines: list[str] = []
-    for ev in engine.events[-limit:]:
+def _is_current_context_event(engine, ev: dict) -> bool:
+    """当前因果链必须完整保留：本轮发言和本夜狼人私聊。"""
+    st = engine.state
+    event_type = ev.get("type")
+    if event_type == "wolf_chat":
+        return ev.get("night") == st.night
+    if event_type in ("speech", "election_speech", "election_pk_speech", "lynch_pk_speech", "last_words"):
+        return ev.get("day") == st.day or ev.get("night") == st.night
+    return False
+
+
+def format_history(engine, seat: int, limit: int = 24) -> str:
+    """按可见性和当前因果链裁剪事件流，避免重复携带整局历史。"""
+    visible: list[tuple[dict, str]] = []
+    for ev in engine.events:
         vis = ev.get("visible_to")
         if vis is not None and seat not in vis:
             continue
         line = _phase_event_line(ev)
         if line:
-            lines.append(line)
+            visible.append((ev, line))
+
+    required = [(ev, line) for ev, line in visible if _is_current_context_event(engine, ev)]
+    required_seqs = {ev.get("seq") for ev, _line in required}
+    recent = [(ev, line) for ev, line in visible if ev.get("seq") not in required_seqs][-limit:]
+    selected = sorted(recent + required, key=lambda item: item[0].get("seq", 0))
+
+    lines: list[str] = []
+    for ev, line in selected:
+        # 历史单条文本有上限；当前轮次仍保留完整条数和顺序。
+        if len(line) > 600:
+            line = line[:600] + "…"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -110,6 +133,30 @@ def _rules_text(board_size: int) -> str:
 - 白天：按顺序发言。狼人可以在白天发言阶段自爆，自爆后立即结束白天进入夜晚，当天不放逐。放逐投票最高票者出局；警长拥有1.5票。平票时进入PK：平票者轮流发言后重新投票，再次平票则当天无人出局。
 - 猎人：被狼人击杀或被放逐时可以开枪带走一名玩家；被女巫毒杀不能开枪。
 - 警长{sheriff}：第一夜后竞选；警长被淘汰后可移交警徽给任意存活玩家或撕毁警徽。"""
+
+
+def _compact_rules_text(board_size: int, phase: str, role: str, window_kind: str) -> str:
+    """只发送当前行动需要的规则，避免每回合重复整套长规则。"""
+    rules = [
+        f"{board_size}人狼人杀；只能依据本座位可见信息行动。",
+        "好人消灭全部狼人获胜；狼人消灭全部平民或全部神职获胜。",
+    ]
+    if window_kind in SPEECH_WINDOWS or phase in ("day_speech", "sheriff_election", "lynch_pk_speech"):
+        rules.append("白天按顺序发言；狼人可在允许阶段自爆。只能输出自然中文发言。")
+    if window_kind in VOTE_WINDOWS or phase in ("lynch_vote", "lynch_pk_vote"):
+        rules.append("投票只能选择合法存活目标；不确定时可以弃权。")
+    if window_kind == "wolf_chat":
+        rules.append("狼人私聊只对存活狼人可见；本轮先沟通，不要在私聊窗口提交击杀。")
+    if window_kind == "wolf_kill":
+        rules.append("狼人击杀意见会统一计票；狼人不能选择队友或自己。")
+    if window_kind == "night_skill":
+        if role == "guard":
+            rules.append("守卫每夜守护一人，不能连续两晚守护同一人。")
+        elif role == "seer":
+            rules.append("预言家每夜查验一人，只得到好人或狼人结果。")
+        elif role == "witch":
+            rules.append("女巫解药和毒药各一次；同夜不能同时使用两瓶药，首夜可自救。")
+    return "\n".join(f"- {rule}" for rule in rules)
 
 
 def build_prompts(engine, seat: int, request: dict, persona: AIPersona | None) -> tuple[str, str]:
@@ -133,7 +180,8 @@ def build_prompts(engine, seat: int, request: dict, persona: AIPersona | None) -
         persona_lines.append("你是一名普通的狼人杀玩家。")
 
     system = f"""你正在玩一局中文狼人杀，坐在 {seat} 号位，身份是「{role_label}」。
-{_rules_text(st.board_size)}
+当前规则：
+{_compact_rules_text(st.board_size, st.phase, role, request.get('window_kind') or '')}
 你的个人设定：
 {chr(10).join(' - ' + l for l in persona_lines)}
 要求：
@@ -164,7 +212,8 @@ def build_prompts(engine, seat: int, request: dict, persona: AIPersona | None) -
         user_lines.append(f"- 你上一晚守护的是 {pv.get('last_target')}号" if pv.get("last_target") else "- 你还没有守护过任何人")
     if role == "wolf" and pv.get("wolf_chat"):
         for c in pv["wolf_chat"]:
-            user_lines.append(f"- 狼人私聊：{c['seat']}号：{c['text']}")
+            if c.get("night", st.night) == st.night:
+                user_lines.append(f"- 本夜狼人私聊：{c['seat']}号：{c.get('text', '')}")
 
     user_lines.append("【公开状态】")
     alive = [f"{s}号" for s in st.alive_seats()]
@@ -209,14 +258,16 @@ def _json_schema_text(kind: str, role: str, night_step: str | None = None) -> st
     if kind == "election_apply":
         return '{"action_type": "apply"}（上警）；{"action_type": "withdraw"}（退水）；{"action_type": "pass"}（不上警）'
     if kind == "wolf_kill":
-        return ('击杀：{"action_type": "wolf_kill", "target_seat_number": 目标座位号}；空刀：{"action_type": "pass"}；'
-                '可选同时发送私聊：{"action_type": "wolf_kill", "target_seat_number": N, "chat_message": "对队友说的话"}')
+        return '击杀：{"action_type": "wolf_kill", "target_seat_number": 目标座位号}；空刀：{"action_type": "pass"}'
+    if kind == "wolf_chat":
+        return '私聊：{"action_type": "chat", "chat_message": "给狼人队友的短消息"}；跳过：{"action_type": "pass"}'
     if kind == "night_skill":
-        if night_step == "guard":
+        skill_role = role if night_step == "skills" else night_step
+        if skill_role == "guard":
             return '守护：{"action_type": "protect", "target_seat_number": 目标座位号}；不守护：{"action_type": "pass"}'
-        if night_step == "seer":
+        if skill_role == "seer":
             return '查验：{"action_type": "check", "target_seat_number": 目标座位号}；不查验：{"action_type": "pass"}'
-        if night_step == "witch":
+        if skill_role == "witch":
             return ('救人：{"action_type": "save", "target_seat_number": 被袭击者}；毒人：{"action_type": "poison", "target_seat_number": 目标}；'
                     '不用药：{"action_type": "pass"}')
         return '{"action_type": "pass"}'

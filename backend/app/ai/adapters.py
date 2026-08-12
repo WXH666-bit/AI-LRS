@@ -1,10 +1,13 @@
 """模型适配器：OpenAI 兼容协议 + Anthropic Messages 协议。"""
 import json
 import time
+from collections.abc import Awaitable, Callable
 
 import httpx
 
 from ..models import ModelConfig
+
+StreamCallback = Callable[[str], Awaitable[None]]
 
 
 class ModelCallError(Exception):
@@ -27,6 +30,19 @@ async def call_model(cfg: ModelConfig, api_key: str, system: str, user: str,
     if cfg.protocol == "anthropic_messages":
         return await _call_anthropic(cfg, api_key, system, user, temperature, max_tokens, timeout)
     return await _call_openai_compatible(cfg, api_key, system, user, temperature, max_tokens, timeout)
+
+
+async def call_model_stream(cfg: ModelConfig, api_key: str, system: str, user: str,
+                            on_delta: StreamCallback,
+                            temperature: float | None = None,
+                            max_tokens: int | None = None) -> tuple[str, dict]:
+    """以 SSE 增量调用模型；回调只接收文本，不改变最终解析流程。"""
+    temperature = cfg.temperature if temperature is None else temperature
+    max_tokens = cfg.max_output_tokens if max_tokens is None else max_tokens
+    timeout = cfg.timeout_seconds or 30
+    if cfg.protocol == "anthropic_messages":
+        return await _stream_anthropic(cfg, api_key, system, user, temperature, max_tokens, timeout, on_delta)
+    return await _stream_openai_compatible(cfg, api_key, system, user, temperature, max_tokens, timeout, on_delta)
 
 
 async def _call_openai_compatible(cfg: ModelConfig, api_key: str, system: str, user: str,
@@ -71,6 +87,63 @@ async def _call_openai_compatible(cfg: ModelConfig, api_key: str, system: str, u
         raise ModelCallError(f"请求失败: {e}")
 
 
+async def _stream_openai_compatible(cfg: ModelConfig, api_key: str, system: str, user: str,
+                                    temperature: float, max_tokens: int, timeout: int,
+                                    on_delta: StreamCallback) -> tuple[str, dict]:
+    url = f"{_base_url(cfg)}/chat/completions"
+    body = {
+        "model": cfg.model_name,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    content: list[str] = []
+    usage: dict = {}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+            async with client.stream("POST", url, headers=headers, json=body) as resp:
+                if resp.status_code == 429:
+                    raise ModelCallError(f"限流 429: {await resp.aread()}", kind="rate_limit")
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    chunk_usage = data.get("usage")
+                    if chunk_usage:
+                        usage = {
+                            "prompt_tokens": chunk_usage.get("prompt_tokens", 0),
+                            "completion_tokens": chunk_usage.get("completion_tokens", 0),
+                        }
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = (choices[0].get("delta") or {}).get("content")
+                    if delta:
+                        content.append(delta)
+                        await on_delta(delta)
+        return "".join(content), usage
+    except ModelCallError:
+        raise
+    except httpx.TimeoutException:
+        raise ModelCallError(f"请求超时（{timeout}s）", kind="timeout")
+    except httpx.HTTPStatusError as e:
+        raise ModelCallError(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+    except Exception as e:
+        raise ModelCallError(f"请求失败: {e}")
+
+
 async def _call_anthropic(cfg: ModelConfig, api_key: str, system: str, user: str,
                           temperature: float, max_tokens: int, timeout: int) -> tuple[str, dict]:
     url = f"{_base_url(cfg)}/v1/messages"
@@ -99,6 +172,68 @@ async def _call_anthropic(cfg: ModelConfig, api_key: str, system: str, user: str
                 "prompt_tokens": usage.get("input_tokens", 0),
                 "completion_tokens": usage.get("output_tokens", 0),
             }
+    except ModelCallError:
+        raise
+    except httpx.TimeoutException:
+        raise ModelCallError(f"请求超时（{timeout}s）", kind="timeout")
+    except httpx.HTTPStatusError as e:
+        raise ModelCallError(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+    except Exception as e:
+        raise ModelCallError(f"请求失败: {e}")
+
+
+async def _stream_anthropic(cfg: ModelConfig, api_key: str, system: str, user: str,
+                            temperature: float, max_tokens: int, timeout: int,
+                            on_delta: StreamCallback) -> tuple[str, dict]:
+    url = f"{_base_url(cfg)}/v1/messages"
+    body = {
+        "model": cfg.model_name,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+        "stream": True,
+    }
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    content: list[str] = []
+    usage: dict = {}
+    event_name = ""
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+            async with client.stream("POST", url, headers=headers, json=body) as resp:
+                if resp.status_code == 429:
+                    raise ModelCallError(f"限流 429: {await resp.aread()}", kind="rate_limit")
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if line.startswith("event:"):
+                        event_name = line[6:].strip()
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if event_name == "message_start":
+                        usage = data.get("message", {}).get("usage") or usage
+                    elif event_name == "message_delta":
+                        usage.update(data.get("usage") or {})
+                    delta = data.get("delta") or {}
+                    text = delta.get("text") if delta.get("type") == "text_delta" else None
+                    if text:
+                        content.append(text)
+                        await on_delta(text)
+        return "".join(content), {
+            "prompt_tokens": usage.get("input_tokens", usage.get("prompt_tokens", 0)),
+            "completion_tokens": usage.get("output_tokens", usage.get("completion_tokens", 0)),
+        }
     except ModelCallError:
         raise
     except httpx.TimeoutException:

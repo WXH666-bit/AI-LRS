@@ -58,6 +58,18 @@ class Hub:
                     logger.info("drop dead connection user=%s", conn.user_id)
                     self.conns.discard(conn)
 
+    async def broadcast_stream(self, update: dict, visible_to: list[int] | None = None) -> None:
+        """广播不入事件流的 AI 文本增量；权限与正式事件保持一致。"""
+        data = {"type": "ai_stream", **update}
+        for conn in list(self.conns):
+            if visible_to is not None and conn.seat not in visible_to:
+                continue
+            try:
+                await conn.send(data)
+            except Exception:
+                logger.info("drop dead connection user=%s", conn.user_id)
+                self.conns.discard(conn)
+
     async def broadcast_view(self) -> None:
         engine = self.engine
         if engine is None:

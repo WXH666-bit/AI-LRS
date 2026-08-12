@@ -10,6 +10,14 @@ export interface GameEvent {
   payload: Record<string, any>;
 }
 
+export interface AIStreamUpdate {
+  stream_id: string;
+  actor_seat: number;
+  window_kind: string | null;
+  text: string;
+  status: "chunk" | "retry" | "complete" | "fallback";
+}
+
 export interface PlayerInfo {
   seat: number;
   name: string;

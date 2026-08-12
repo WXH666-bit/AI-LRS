@@ -153,6 +153,31 @@ class GameEngine:
                 await self.hub.broadcast_event(ev)
             await self.hub.broadcast_view()
 
+    async def emit_ai_stream(self, seat: int, token: int, stream_id: str,
+                             text: str, status: str = "chunk") -> bool:
+        """发送不持久化的 AI 文本增量；先校验回合，再在锁外广播。"""
+        async with self.lock:
+            st = self.state
+            if (st is None or st.status != "running" or token != st.turn_token
+                    or seat not in st.acting_seats):
+                return False
+            if st.window_kind == "wolf_chat":
+                visible_to = st.alive_wolves()
+            elif st.window_kind in SPEECH_WINDOWS:
+                visible_to = None
+            else:
+                visible_to = [seat]
+            update = {
+                "stream_id": stream_id,
+                "actor_seat": seat,
+                "window_kind": st.window_kind,
+                "text": text,
+                "status": status,
+            }
+        if self.hub:
+            await self.hub.broadcast_stream(update, visible_to=visible_to)
+        return True
+
     def _apply_event(self, st: GameState, ev: dict) -> None:
         """把事件应用到状态。phase_change 携带完整状态，直接重建。"""
         etype, payload = ev["type"], ev["payload"]
@@ -190,7 +215,14 @@ class GameEngine:
         elif etype == "wolf_vote":
             st.wolf_votes[ev["actor_seat"]] = payload["target"]
         elif etype == "wolf_chat":
-            st.wolf_chat.append({"seat": ev["actor_seat"], "text": payload.get("text", "")})
+            st.wolf_chat.append({
+                "night": ev.get("night", st.night),
+                "seat": ev["actor_seat"],
+                "text": payload.get("text", ""),
+                "skipped": payload.get("skipped", False),
+            })
+            if ev["actor_seat"] not in st.wolf_chat_done:
+                st.wolf_chat_done.append(ev["actor_seat"])
         elif etype == "wolf_kill_result":
             st.wolf_kill_target = payload.get("target")
         elif etype == "guard_action":
@@ -365,6 +397,54 @@ class GameEngine:
                 p.consecutive_timeouts = 0
                 self._players_dirty = True
 
+    def _night_skill_acted(self, role: str | None) -> bool:
+        st = self.state
+        if role == "guard":
+            return st.guard_acted
+        if role == "seer":
+            return st.seer_acted
+        if role == "witch":
+            return st.witch_acted
+        return False
+
+    def _seat_window_complete(self, seat: int) -> bool:
+        """判断并行窗口中的单个座位是否已经提交过动作。"""
+        st = self.state
+        kind = st.window_kind
+        if kind == "wolf_kill":
+            return seat in st.wolf_votes
+        if kind == "wolf_chat":
+            return seat in st.wolf_chat_done
+        if kind == "election_apply":
+            return seat in st.election_applies
+        if kind in SPEECH_WINDOWS:
+            if kind == "speech":
+                return seat in st.speeches
+            if kind == "election_speak":
+                return seat in st.election_speeches
+            if kind == "election_pk_speak":
+                return seat in st.election_pk_speeches
+            if kind == "lynch_pk_speak":
+                return seat in st.lynch_pk_speeches
+            return st.last_words_acted
+        if kind in VOTE_WINDOWS:
+            return seat in getattr(st, VOTE_WINDOWS[kind][1])
+        if kind == "night_skill":
+            player = st.player(seat)
+            if not player:
+                return True
+            role = player.role if st.night_step == "skills" else st.night_step
+            return self._night_skill_acted(role)
+        if kind == "hunter_shot":
+            return st.hunter_shot_acted
+        if kind == "sheriff_transfer":
+            return st.transfer_acted
+        return False
+
+    def _pending_window_seats(self) -> list[int]:
+        """返回当前窗口尚未提交动作的座位，供 AI、超时和前端操作共同使用。"""
+        return [seat for seat in self.state.acting_seats if not self._seat_window_complete(seat)]
+
     def _window_complete(self) -> bool:
         st = self.state
         kind = st.window_kind
@@ -372,40 +452,11 @@ class GameEngine:
             return True
         if kind == "wolf_kill":
             wolves = set(st.alive_wolves())
-            return bool(wolves) and wolves.issubset(st.wolf_votes.keys())
+            return bool(wolves) and not self._pending_window_seats()
         if kind == "election_apply":
             alive = set(st.alive_seats())
             return alive.issubset(st.election_applies.keys())
-        if not st.acting_seats:
-            return True
-        actor = st.acting_seats[0]
-        if kind in SPEECH_WINDOWS:
-            if kind == "speech":
-                return actor in st.speeches
-            if kind == "election_speak":
-                return actor in st.election_speeches
-            if kind == "election_pk_speak":
-                return actor in st.election_pk_speeches
-            if kind == "lynch_pk_speak":
-                return actor in st.lynch_pk_speeches
-            return st.last_words_acted
-        if kind in VOTE_WINDOWS:
-            key = VOTE_WINDOWS[kind][1]
-            return actor in getattr(st, key)
-        if kind == "night_skill":
-            step = st.night_step
-            if step == "guard":
-                return st.guard_acted
-            if step == "seer":
-                return st.seer_acted
-            if step == "witch":
-                return st.witch_acted
-            return False
-        if kind == "hunter_shot":
-            return st.hunter_shot_acted
-        if kind == "sheriff_transfer":
-            return st.transfer_acted
-        return False
+        return not st.acting_seats or not self._pending_window_seats()
 
     async def _tick(self) -> None:
         """推进状态机：胜负判定 → 自爆结算 → 打开下一窗口或阶段转移。持有 self.lock。"""
@@ -453,6 +504,11 @@ class GameEngine:
 
         if st.phase == "night":
             step = st.night_step
+            if step == "wolf_chat":
+                wolves = [s for s in st.alive_wolves() if s not in st.wolf_chat_done]
+                if wolves:
+                    return ("wolf_chat", wolves[:1], to)
+                return (None, [], 0)
             if step == "wolf_kill":
                 wolves = [s for s in st.alive_wolves() if s not in st.wolf_votes]
                 if wolves:
@@ -473,6 +529,13 @@ class GameEngine:
                     return (None, [], 0)
                 witch = st.alive_roles({"witch"})
                 return (None, [], 0) if not witch else ("night_skill", witch[:1], to)
+            if step == "skills":
+                seats = []
+                for seat in st.alive_seats():
+                    player = st.player(seat)
+                    if player and player.role in ("guard", "seer", "witch") and not self._night_skill_acted(player.role):
+                        seats.append(seat)
+                return ("night_skill", seats, to) if seats else (None, [], 0)
             return (None, [], 0)  # resolve
 
         if st.phase == "sheriff_election":
@@ -488,9 +551,9 @@ class GameEngine:
                         return ("election_speak", [c], to)
                 return (None, [], 0)
             if stage == "vote":
-                for s in alive:
-                    if s not in st.election_votes:
-                        return ("election_vote", [s], to)
+                seats = [s for s in alive if s not in st.election_votes]
+                if seats:
+                    return ("election_vote", seats, to)
                 return (None, [], 0)
             if stage == "pk_speak":
                 for c in st.election_pk:
@@ -498,9 +561,9 @@ class GameEngine:
                         return ("election_pk_speak", [c], to)
                 return (None, [], 0)
             if stage == "pk_vote":
-                for s in alive:
-                    if s not in st.election_pk_votes:
-                        return ("election_pk_vote", [s], to)
+                seats = [s for s in alive if s not in st.election_pk_votes]
+                if seats:
+                    return ("election_pk_vote", seats, to)
                 return (None, [], 0)
 
         if st.phase == "night_result":
@@ -513,15 +576,15 @@ class GameEngine:
             return (None, [], 0)
 
         if st.phase == "lynch_vote":
-            for s in alive:
-                if s not in st.lynch_votes:
-                    return ("lynch_vote", [s], to)
+            seats = [s for s in alive if s not in st.lynch_votes]
+            if seats:
+                return ("lynch_vote", seats, to)
             return (None, [], 0)
 
         if st.phase == "lynch_pk_vote":
-            for s in alive:
-                if s not in st.lynch_pk_votes:
-                    return ("lynch_pk_vote", [s], to)
+            seats = [s for s in alive if s not in st.lynch_pk_votes]
+            if seats:
+                return ("lynch_pk_vote", seats, to)
             return (None, [], 0)
 
         if st.phase == "lynch_pk_speech":
@@ -621,6 +684,11 @@ class GameEngine:
     def _transition_night(self, events: list[dict]) -> list[dict]:
         st = self.state
         step = st.night_step
+        if step == "wolf_chat":
+            st.night_step = "wolf_kill"
+            st.wolf_votes = {}
+            events.append(self._make_event("phase_change", None, self._state_payload()))
+            return events
         if step == "wolf_kill":
             votes = [t for t in st.wolf_votes.values() if t]
             target = None
@@ -639,7 +707,18 @@ class GameEngine:
             # 进入守卫步骤（重置本夜守卫字段）
             st.guard_target = None
             st.guard_acted = False
-            st.night_step = "guard"
+            st.seer_check_target = None
+            st.seer_acted = False
+            st.witch_save_target = None
+            st.witch_poison_target = None
+            st.witch_acted = False
+            st.witch_victim = st.wolf_kill_target
+            events.append(self._make_event(
+                "witch_info", None,
+                {"victim": st.witch_victim, "save_used": st.witch_save_used},
+                visible_to=st.alive_roles({"witch"}),
+            ))
+            st.night_step = "skills"
             events.append(self._make_event("phase_change", None, self._state_payload()))
             return events
         if step == "guard":
@@ -659,6 +738,10 @@ class GameEngine:
                                            {"victim": st.witch_victim, "save_used": st.witch_save_used},
                                            visible_to=st.alive_roles({"witch"})))
             st.night_step = "witch"
+            events.append(self._make_event("phase_change", None, self._state_payload()))
+            return events
+        if step == "skills":
+            st.night_step = "resolve"
             events.append(self._make_event("phase_change", None, self._state_payload()))
             return events
         if step == "witch":
@@ -861,8 +944,10 @@ class GameEngine:
     def _start_night(self, events: list[dict]) -> list[dict]:
         st = self.state
         st.night += 1
-        st.night_step = "wolf_kill"
+        st.night_step = "wolf_chat"
         st.wolf_votes = {}
+        st.wolf_chat = []
+        st.wolf_chat_done = []
         st.wolf_kill_target = None
         st.guard_prev_target = st.guard_target
         st.guard_target = None
@@ -921,16 +1006,17 @@ class GameEngine:
     # ============================================================ 超时处理
     async def _force_timeout(self) -> None:
         st = self.state
-        if not st.acting_seats:
+        pending_seats = self._pending_window_seats()
+        if not pending_seats:
             st.deadline = 0
             return
-        ai_pending = [s for s in st.acting_seats
+        ai_pending = [s for s in pending_seats
                       if st.player(s) and st.player(s).controller_type in ("ai", "trustee")]
         if ai_pending and all(s in self._ai_inflight for s in ai_pending):
             st.deadline = time.monotonic() + 10  # AI 调用在途，延长等待
             return
         events: list[dict] = []
-        for seat in st.acting_seats:
+        for seat in pending_seats:
             p = st.player(seat)
             if not p:
                 continue
@@ -961,6 +1047,8 @@ class GameEngine:
     def _skip_event_for(self, seat: int) -> tuple[str, dict]:
         """超时/弃权对应的事件。"""
         kind = self.state.window_kind or ""
+        if kind == "wolf_chat":
+            return "wolf_chat", {"text": "", "skipped": True}
         if kind == "wolf_kill":
             return "wolf_vote", {"target": 0}
         if kind == "election_apply":
@@ -970,7 +1058,8 @@ class GameEngine:
         if kind in SPEECH_WINDOWS:
             return SPEECH_WINDOWS[kind], {"skipped": True}
         if kind == "night_skill":
-            step = self.state.night_step
+            player = self.state.player(seat)
+            step = player.role if self.state.night_step == "skills" and player else self.state.night_step
             if step == "guard":
                 return "guard_action", {"target": None, "skipped": True}
             if step == "seer":
@@ -985,6 +1074,12 @@ class GameEngine:
 
     def _skip_event_visibility(self, seat: int) -> list[int] | None:
         """返回超时/弃权事件的可见范围。夜间查验和用药决定属于个人信息。"""
+        if self.state.window_kind == "wolf_chat":
+            return self.state.alive_wolves()
+        if self.state.window_kind == "night_skill":
+            player = self.state.player(seat)
+            if player and player.role in ("guard", "seer", "witch"):
+                return [seat]
         if self.state.window_kind == "night_skill" and self.state.night_step in ("seer", "witch"):
             return [seat]
         return None
@@ -994,7 +1089,7 @@ class GameEngine:
         st = self.state
         if self._ai is None or not st.acting_seats:
             return
-        for seat in st.acting_seats:
+        for seat in self._pending_window_seats():
             p = st.player(seat)
             if not p or p.controller_type not in ("ai", "trustee"):
                 continue
@@ -1078,12 +1173,16 @@ class GameEngine:
         if cmd_type == "wolf_chat":
             if p.role != "wolf" or not p.alive:
                 raise GameError("只有存活的狼人可以私聊")
-            if st.window_kind != "wolf_kill":
+            if st.window_kind != "wolf_chat" or seat not in st.acting_seats:
                 raise GameError("现在不是狼人夜聊时间")
             text = str(payload.get("text", "")).strip()
             if not text:
                 raise GameError("消息不能为空")
-            return [self._make_event("wolf_chat", seat, {"text": text[:500]}, visible_to=st.alive_wolves())]
+            return [self._make_event(
+                "wolf_chat", seat,
+                {"text": text[:240], "skipped": False},
+                visible_to=st.alive_wolves(),
+            )]
 
         if cmd_type == "wolf_explode":
             if p.role != "wolf" or not p.alive:
@@ -1098,6 +1197,8 @@ class GameEngine:
         # —— 以下命令必须是当前窗口行动者 ——
         if seat not in st.acting_seats:
             raise GameError("现在不需要你行动")
+        if self._seat_window_complete(seat):
+            raise GameError("你已经完成当前行动")
         if not p.alive and st.window_kind not in ("sheriff_transfer", "last_words", "hunter_shot"):
             raise GameError("你已经出局")
 
@@ -1173,7 +1274,7 @@ class GameEngine:
             skill = payload.get("skill")
             raw_target = payload.get("target")
             target = int(raw_target) if raw_target else None
-            step = st.night_step
+            step = p.role if st.night_step == "skills" else st.night_step
             if step == "guard":
                 if skill != "guard_protect":
                     raise GameError("守卫需要选择守护目标")
@@ -1282,7 +1383,7 @@ class GameEngine:
         }
 
     def _ai_result_to_commands(self, seat: int, result: dict | None) -> list[tuple[str, dict]]:
-        """把模型输出转为命令列表（可同时含私聊与击杀）；非法输出走兜底。"""
+        """把模型输出转为命令列表；非法输出走确定性兜底。"""
         st = self.state
         kind = st.window_kind or ""
         if not result or not isinstance(result, dict):
@@ -1297,7 +1398,7 @@ class GameEngine:
 
         if kind in SPEECH_WINDOWS:
             if action in ("speak", "speech") and text:
-                return [("speak", {"text": text})]
+                return [("speak", {"text": text[:600]})]
             if action in ("pass", "skip"):
                 return [("pass", {})]
             return [self._fallback_command(seat)]
@@ -1311,16 +1412,21 @@ class GameEngine:
             if action == "withdraw":
                 return [("sheriff_action", {"action": "withdraw"})]
             return [("sheriff_action", {"action": "pass"})]
-        if kind == "wolf_kill":
+        if kind == "wolf_chat":
             if chat:
-                cmds.append(("wolf_chat", {"text": chat}))
+                return [("wolf_chat", {"text": chat})]
+            if action in ("chat", "speak") and text:
+                return [("wolf_chat", {"text": text})]
+            return [("pass", {})]
+        if kind == "wolf_kill":
             if action in ("vote", "wolf_kill") and isinstance(target, int) and target > 0:
                 cmds.append(("use_skill", {"skill": "wolf_kill", "target": target}))
             else:
                 cmds.append(("use_skill", {"skill": "wolf_kill", "target": 0}))
             return cmds
         if kind == "night_skill":
-            step = st.night_step
+            player = st.player(seat)
+            step = player.role if st.night_step == "skills" and player else st.night_step
             if step == "guard":
                 if action == "protect" and isinstance(target, int) and target > 0:
                     return [("use_skill", {"skill": "guard_protect", "target": target})]
@@ -1350,10 +1456,16 @@ class GameEngine:
         return [("pass", {})]
 
     def _fallback_command(self, seat: int) -> tuple[str, dict]:
-        """模型彻底失败时的确定性兜底：弃权/跳过。"""
+        """模型彻底失败时的确定性兜底：发言类非空，其余动作合法跳过。"""
+        if self.state.window_kind == "wolf_chat":
+            return ("wolf_chat", {"text": self._fallback_wolf_chat(seat)})
         if self.state.window_kind in SPEECH_WINDOWS:
             return ("speak", {"text": self._fallback_speech(seat)})
         return ("pass", {})
+
+    def _fallback_wolf_chat(self, seat: int) -> str:
+        """狼人私聊失败时仍发送一条短的阵营消息，避免沟通轮次被静默跳过。"""
+        return f"{seat}号先稳住节奏，结合公开发言后再统一决定目标。"
 
     def _fallback_speech(self, seat: int) -> str:
         """模型异常时使用的最小公开发言，避免失败直接变成跳过。"""
@@ -1374,6 +1486,8 @@ class GameEngine:
             return []
         if seat not in st.acting_seats:
             return []
+        if self._seat_window_complete(seat):
+            return []
         kind = st.window_kind or ""
         out: list[dict] = []
         if kind in SPEECH_WINDOWS:
@@ -1389,12 +1503,14 @@ class GameEngine:
             if seat in st.candidates:
                 out.append({"type": "sheriff_action", "action": "withdraw", "label": "退水"})
             out.append({"type": "sheriff_action", "action": "pass", "label": "不上警"})
+        elif kind == "wolf_chat":
+            out.append({"type": "wolf_chat", "label": "狼人私聊"})
+            out.append({"type": "pass", "label": "跳过"})
         elif kind == "wolf_kill":
             out.append({"type": "use_skill", "skill": "wolf_kill", "label": "击杀目标"})
-            out.append({"type": "wolf_chat", "label": "狼人私聊"})
             out.append({"type": "pass", "label": "空刀"})
         elif kind == "night_skill":
-            step = st.night_step
+            step = p.role if st.night_step == "skills" else st.night_step
             if step == "guard":
                 out.append({"type": "use_skill", "skill": "guard_protect", "label": "守护目标"})
             elif step == "seer":
@@ -1433,7 +1549,7 @@ class GameEngine:
             return [{"seat": s, "label": f"{s}号·{st.display_name(s)}"}
                     for s in alive if st.player(s).role != "wolf"]
         if kind == "night_skill":
-            step = st.night_step
+            step = p.role if st.night_step == "skills" else st.night_step
             out: list[dict] = []
             if step == "guard":
                 out = [{"seat": s, "label": f"{s}号·{st.display_name(s)}"}
@@ -1520,7 +1636,7 @@ class GameEngine:
             "winner": st.winner,
             "end_reason": st.end_reason,
             "speed": st.speed,
-            "acting_seats": list(st.acting_seats),
+            "acting_seats": self._pending_window_seats(),
             "deadline": max(0, st.deadline - time.monotonic()) if st.deadline else 0,
             "election_stage": st.election_stage,
             "night_step": st.night_step,
@@ -1687,8 +1803,10 @@ class GameEngine:
         st.winner = None
         st.election_done = False
         st.sheriff_seat = None
-        st.night_step = "wolf_kill"
+        st.night_step = "wolf_chat"
         st.wolf_votes = {}
+        st.wolf_chat = []
+        st.wolf_chat_done = []
         st.exploded_seat = None
 
         events = [self._make_event("game_started", None, {"board_size": st.board_size})]
